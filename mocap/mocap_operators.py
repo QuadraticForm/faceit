@@ -660,12 +660,7 @@ class FACEIT_OT_ImportMocap(FaceRegionsBaseProperties, bpy.types.Operator):
         if self.engine != 'A2F' and futils.get_faceit_control_armature():
             row.prop(self, 'bake_to_control_rig', icon='CON_ARMATURE')
 
-        if self.bake_to_control_rig:
-            row = layout.row()
-            row.label(text='New Action Name:')
-            row = layout.row()
-            row.prop(self, 'new_action_name', text='', icon='ACTION')
-        else:
+        if self.bake_to_control_rig is not True:
             row = layout.row()
             row.prop(self, 'load_action_type', icon='ACTION', expand=True)
             row = layout.row()
