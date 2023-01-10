@@ -813,33 +813,51 @@ control_rig_drivers_dict = {
         'main_dir': 1,
     },
     'noseSneerLeft': {
-        'expression': '( ( var - 1 ) / 0.5) if var >= 1 else ((- var + 1) / 0.5)',
+        # NID:
+        'expression': 'var',
+        # NID original:
+        # 'expression': '( ( var - 1 ) / 0.5) if var >= 1 else ((- var + 1) / 0.5)',
         # 'expression': '( ( var - 1 ) / 0.5 * {slider_min} ) if var >= 1 else ((- var + 1) / 0.5 * {slider_max} )',
         'variables': {
             'var': {
                 'bone_name': 'c_nose_sneer.L',
-                'transform_type': 'SCALE_AVG',
+                # NID:
+                'transform_type': 'LOC_Y',
+                # NID original:
+                # 'transform_type': 'SCALE_AVG',
                 'transform_space': 'LOCAL_SPACE',
             },
         },
         'overwrite_expression': False,
         'range': 'all',
-        'main_dir': -1,
+        # NID:
+        'main_dir': 1,
+        # NID original:
+        # main_dir': -1,
     },
     'noseSneerRight': {
+        # NID:
+        'expression': 'var',
         # 'expression': 'var / 1.5',
-        'expression': '( ( var - 1 ) / 0.5) if abs(var) >= 1 else (((- var + 1) / 0.5))',
+        # NID original:
+        # 'expression': '( ( var - 1 ) / 0.5) if abs(var) >= 1 else (((- var + 1) / 0.5))',
         # 'expression': '( ( var - 1 ) / 0.5 * {slider_min} ) if abs(var) >= 1 else (((- var + 1) / 0.5) * {slider_max} )',
         'variables': {
             'var': {
                 'bone_name': 'c_nose_sneer.R',
-                'transform_type': 'SCALE_AVG',
+                # NID:
+                'transform_type': 'LOC_Y',
+                # NID original:
+                # 'transform_type': 'SCALE_AVG',
                 'transform_space': 'LOCAL_SPACE',
             },
         },
         'overwrite_expression': False,
         'range': 'all',
-        'main_dir': -1,
+        # NID:
+        'main_dir': 1,
+        # NID original:
+        # main_dir': -1,
     },
     'tongueOut': {
         'variables': {
