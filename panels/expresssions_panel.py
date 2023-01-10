@@ -9,7 +9,7 @@ from .ui import FACEIT_PT_Base
 
 
 class FACEIT_PT_BaseExpressions(FACEIT_PT_Base):
-    UI_TAB = 'EXPRESSIONS'
+    UI_TABS = ('EXPRESSIONS',)
 
     @classmethod
     def poll(cls, context):
@@ -82,6 +82,11 @@ class FACEIT_PT_Expressions(FACEIT_PT_BaseExpressions, bpy.types.Panel):
 
         if actions_disabled:
             row = col.row()
+            row.label(text="Return")
+            row = col.row()
+            row.operator('faceit.reset_to_rig', icon='BACK')
+            col.separator(factor=2)
+            row = col.row()
             row.template_list('FACEIT_UL_ExpressionsBaked', '', bpy.context.scene,
                               'faceit_expression_list', scene, 'faceit_expression_list_index')
             row = col.row(align=True)
@@ -97,7 +102,6 @@ class FACEIT_PT_Expressions(FACEIT_PT_BaseExpressions, bpy.types.Panel):
         elif 'faceit_shape_action' in bpy.data.actions and scene.faceit_expression_list:
 
             col.separator()
-
             row = col.row()
             row.template_list('FACEIT_UL_Expressions', '', bpy.context.scene,
                               'faceit_expression_list', scene, 'faceit_expression_list_index')
@@ -271,7 +275,7 @@ class FACEIT_MT_ExpressionList(bpy.types.Menu):
         op = row.operator('faceit.reset_bone_constraints', icon='CONSTRAINT_BONE')
 
 
-# def draw(context, layout, landmarks_obj, rig):
+# def draw(context, layout, lm_obj, rig):
 
 #     scene = context.scene
 

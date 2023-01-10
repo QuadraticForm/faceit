@@ -69,7 +69,11 @@ def register():
         name='draw handler',
         default=''
     )
-
+    Scene.faceit_show_landmarks_ctrl_rig = BoolProperty(
+        name="Show Landmarks Panel",
+        description="Show the Landmarks Panel in the Control Rig Tab",
+        default=False,
+    )
     Scene.faceit_control_armature = PointerProperty(
         name='The Control Rig',
         description='the control rig used to control and manipulate the Faceit Expressions. Create override to load linked control rigs.',

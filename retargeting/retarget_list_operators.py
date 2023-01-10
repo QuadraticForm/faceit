@@ -116,6 +116,12 @@ class FACEIT_OT_InitRetargeting(bpy.types.Operator):
         ),
         default='ALL'
     )
+    quick_search: BoolProperty(
+        name="Quick Search",
+        description="Only check for exact matches",
+        default=False,
+        options={'HIDDEN', 'SKIP_SAVE'}
+    )
 
     @classmethod
     def poll(cls, context):
@@ -169,7 +175,7 @@ class FACEIT_OT_InitRetargeting(bpy.types.Operator):
 
         if not shape_key_names:
             self.report({'WARNING'}, 'The registered object have no shape keys.')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         # Remove prefix /suffix from shape names
         match_names = {}
@@ -217,7 +223,7 @@ class FACEIT_OT_InitRetargeting(bpy.types.Operator):
                     target_item.name = display_name
                     shape_key_names.remove(display_name)
                     continue
-                else:
+                elif not self.quick_search:
                     if new_names:
                         found_shape = detect_shape(
                             new_names,
@@ -245,9 +251,7 @@ class FACEIT_OT_InitRetargeting(bpy.types.Operator):
 
             set_base_regions_from_dict(retarget_list)
 
-            if missing_shapes:
-                for shape in reversed(missing_shapes):
-                    self.report({'WARNING'}, f'Couldn\'t find target shape for expression {shape}')
+            if missing_shapes and not self.quick_search:
                 self.report(
                     {'WARNING'},
                     f'Couldn\'t find all {expression_set} target shapes. Did you generate the expressions')
@@ -256,7 +260,7 @@ class FACEIT_OT_InitRetargeting(bpy.types.Operator):
             # if region.type == 'UI':
             region.tag_redraw()
 
-        return{'FINISHED'}
+        return {'FINISHED'}
 
 
 class FACEIT_OT_ResetRetargetShapes(bpy.types.Operator):
@@ -290,7 +294,7 @@ class FACEIT_OT_ResetRetargetShapes(bpy.types.Operator):
 
         retarget_list.clear()
 
-        return{'FINISHED'}
+        return {'FINISHED'}
 
 
 class FACEIT_OT_ImportRetargetMap(bpy.types.Operator):
@@ -312,11 +316,11 @@ class FACEIT_OT_ImportRetargetMap(bpy.types.Operator):
         default='ARKIT'
     )
 
-    @classmethod
-    def poll(cls, context):
-        obj = futils.get_main_faceit_object()
-        if obj:
-            return sk_utils.has_shape_keys(obj)
+    # @classmethod
+    # def poll(cls, context):
+    #     obj = futils.get_main_faceit_object()
+    #     if obj:
+    #         return sk_utils.has_shape_keys(obj)
 
     def invoke(self, context, event):
         self.filepath = 'retargeting_preset.json'
@@ -329,7 +333,7 @@ class FACEIT_OT_ImportRetargetMap(bpy.types.Operator):
         _filename, extension = os.path.splitext(self.filepath)
         if extension != '.json':
             self.report({'ERROR'}, 'You need to provide a file of type .json')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         with open(self.filepath, 'r') as f:
             data = json.load(f)
@@ -484,6 +488,10 @@ class FACEIT_OT_SetActiveShapeKeyIndex(bpy.types.Operator):
         scene.tool_settings.use_keyframe_insert_auto = False
 
         faceit_objects = futils.get_faceit_objects_list()
+        # Get all possible target shapes
+        all_expression_names = get_all_set_target_shapes(scene.faceit_arkit_retarget_shapes)
+        all_expression_names.extend(get_all_set_target_shapes(scene.faceit_a2f_retarget_shapes))
+        all_expression_names.extend([ex.name for ex in scene.faceit_expression_list])
 
         if self.get_active_target_shapes:
 
@@ -506,7 +514,7 @@ class FACEIT_OT_SetActiveShapeKeyIndex(bpy.types.Operator):
 
         if not target_shapes:
             # self.report({'ERROR'}, 'Did not find the Shape Key(s) {}'.format(target_shapes))
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         for obj in faceit_objects:
             if not sk_utils.has_shape_keys(obj):
@@ -518,7 +526,8 @@ class FACEIT_OT_SetActiveShapeKeyIndex(bpy.types.Operator):
 
             if lock_active:
                 for sk in shapekeys:
-                    sk.value = 0
+                    if sk.name in all_expression_names:
+                        sk.value = 0
 
             for target_shape_name in target_shapes:
 
@@ -531,8 +540,12 @@ class FACEIT_OT_SetActiveShapeKeyIndex(bpy.types.Operator):
                         _set_active = True
 
                     if lock_active:
+                        if target_shape_name == "mouthClose":
+                            jawOpenSk = shapekeys.get("jawOpen")
+                            if jawOpenSk:
+                                jawOpenSk.value = 1
                         shapekeys[found_index].value = 1
 
         scene.tool_settings.use_keyframe_insert_auto = store_auto_kf
 
-        return{'FINISHED'}
+        return {'FINISHED'}

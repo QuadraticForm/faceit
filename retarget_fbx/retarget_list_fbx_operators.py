@@ -201,7 +201,7 @@ class FACEIT_OT_InitFBXRetargeting(bpy.types.Operator):
         retarget_list.clear()
         missing_shapes = []
 
-        for i, source_shape in enumerate(shape_key_names_source):
+        for _, source_shape in enumerate(shape_key_names_source):
 
             item = retarget_list.add()
 
@@ -242,8 +242,8 @@ class FACEIT_OT_InitFBXRetargeting(bpy.types.Operator):
             missing_shapes.append(source_shape)
 
         if missing_shapes:
-            for shape in reversed(missing_shapes):
-                self.report({'WARNING'}, 'Couldn\'t find target shape for ARKit expression {}'.format(shape))
+            self.report(
+                {'WARNING'}, 'Couldn\'t find all target shapes. Are the shape keys missing?')
 
         for region in context.area.regions:
             region.tag_redraw()

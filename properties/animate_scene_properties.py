@@ -5,6 +5,8 @@ from bpy.props import (BoolProperty, CollectionProperty, IntProperty,
                        StringProperty, EnumProperty)
 from bpy.types import PropertyGroup, Scene
 
+from ..shape_keys.corrective_shape_keys_utils import mute_corrective_shape_keys, reevaluate_corrective_shape_keys
+
 from ..core import faceit_utils as futils
 from ..core import shape_key_utils
 
@@ -54,11 +56,8 @@ class Anim_Properties(PropertyGroup):
 
 def update_expression_list_index(self, context):
     scene = self
-
     if scene.faceit_expression_list:
-
         new_expression = scene.faceit_expression_list[scene.faceit_expression_list_index]
-
         rig = futils.get_faceit_armature()
         if rig:
             actions_disabled = rig.hide_viewport is True or scene.faceit_shapes_generated
@@ -72,15 +71,12 @@ def update_expression_list_index(self, context):
                         'EXEC_DEFAULT', shape_name=new_expression.name, get_active_target_shapes=False)
         else:
             use_mirror = new_expression.mirror_name == ''
-
             scene.frame_current = new_expression.frame
-
             if rig and scene.faceit_use_auto_mirror_x:
                 rig.pose.use_mirror_x = use_mirror
             if context.scene.faceit_try_mirror_corrective_shapes:
                 for obj in futils.get_faceit_objects_list():
                     obj.data.use_mirror_x = use_mirror
-
             # Get corrective shape on new index
             if scene.faceit_use_corrective_shapes and new_expression.corr_shape_key:
                 corr_sk_name = 'faceit_cc_' + new_expression.name
@@ -93,23 +89,18 @@ def update_expression_list_index(self, context):
 
 def update_corrective_shape_key_values(self, context):
     '''Update function for '''
-    use_corr = self.faceit_use_corrective_shapes
-    faceit_objects = futils.get_faceit_objects_list()
-    for obj in faceit_objects:
-        if shape_key_utils.has_shape_keys(obj):
-            for sk in obj.data.shape_keys.key_blocks:
-                if sk.name.startswith('faceit_cc_'):
-                    sk.mute = not use_corr
+    if self.faceit_use_corrective_shapes:
+        reevaluate_corrective_shape_keys()
+    else:
+        mute_corrective_shape_keys()
 
 
 def update_auto_mirror_x(self, context):
     rig = futils.get_faceit_armature()
     expression = self.faceit_expression_list[self.faceit_expression_list_index]
     use_mirror = expression.mirror_name == ''
-    name = expression.name
     if rig is not None:
         rig.pose.use_mirror_x = use_mirror
-
     if expression.corr_shape_key and context.scene.faceit_try_mirror_corrective_shapes:
         for obj in futils.get_faceit_objects_list():
             obj.data.use_mirror_x = use_mirror

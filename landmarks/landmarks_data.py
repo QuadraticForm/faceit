@@ -4,6 +4,7 @@ LOCATOR_NAMES = [
     'eye_locator_R',
     'teeth_upper_locator',
     'teeth_lower_locator',
+    'jaw_locator',
 ]
 
 

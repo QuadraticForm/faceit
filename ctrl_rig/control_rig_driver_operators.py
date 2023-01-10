@@ -48,11 +48,11 @@ class FACEIT_OT_SetupControlDrivers(bpy.types.Operator):
 
         if not crig_targets:
             self.report({'ERROR'}, 'Couldn\'t find any target shapes. Please update the control rig first.')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         if not crig_objects:
             self.report({'ERROR'}, 'Couldn\'t find any target objects. Please specify them or update the control rig first.')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         connected_any = False
 
@@ -108,7 +108,7 @@ class FACEIT_OT_SetupControlDrivers(bpy.types.Operator):
 
 
 class FACEIT_OT_RemoveControlDrivers(bpy.types.Operator):
-    '''Setup drivers to control the shape keys with control rig'''
+    '''Remove all drivers for active control rig'''
     bl_idname = 'faceit.remove_control_drivers'
     bl_label = 'Disconnect Control Rig'
     bl_options = {'REGISTER', 'UNDO', 'INTERNAL'}
@@ -121,7 +121,6 @@ class FACEIT_OT_RemoveControlDrivers(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        # return True
         if context.mode in ('OBJECT', 'POSE'):
             c_rig = futils.get_faceit_control_armature()
             if c_rig:
@@ -134,45 +133,48 @@ class FACEIT_OT_RemoveControlDrivers(bpy.types.Operator):
 
         use_faceit_scene_settings_fallback = bool(len(futils.get_faceit_control_armatures()) <= 1)
 
+        clear_any = False
         c_rig = futils.get_faceit_control_armature()
+        if c_rig:
+            faceit_objects = ctrl_utils.get_crig_objects_list(c_rig)
+            all_target_shapes = rutils.get_all_set_target_shapes(c_rig.faceit_crig_targets)
+            if not faceit_objects:
+                self.report({'WARNING'}, 'Couldn\'t find any target objects. Please update the control rig.')
+                if use_faceit_scene_settings_fallback:
+                    faceit_objects = futils.get_faceit_objects_list()
+            if not all_target_shapes:
+                self.report({'WARNING'}, 'Couldn\'t find any target shapes. Please update the control rig.')
+                if use_faceit_scene_settings_fallback:
+                    all_target_shapes = rutils.get_all_set_target_shapes(scene.faceit_arkit_retarget_shapes)
 
-        face_objects = ctrl_utils.get_crig_objects_list(c_rig)
+            for obj in faceit_objects:
+                if shape_key_utils.has_shape_keys(obj):
+                    shapekeys = obj.data.shape_keys
+                else:
+                    continue
 
-        all_target_shapes = rutils.get_all_set_target_shapes(c_rig.faceit_crig_targets)
+                if not shapekeys.animation_data:
+                    continue
 
-        if not face_objects:
-            self.report({'WARNING'}, 'Couldn\'t find any target objects. Please update the control rig.')
-            if use_faceit_scene_settings_fallback:
-                face_objects = futils.get_faceit_objects_list()
-        if not all_target_shapes:
-            self.report({'WARNING'}, 'Couldn\'t find any target shapes. Please update the control rig.')
-            if use_faceit_scene_settings_fallback:
-                all_target_shapes = rutils.get_all_set_target_shapes(scene.faceit_arkit_retarget_shapes)
+                if self.remove_all:
+                    for dr in shapekeys.animation_data.drivers:
+                        shapekeys.driver_remove(dr.data_path, -1)
+                    continue
 
-        for obj in face_objects:
-            if shape_key_utils.has_shape_keys(obj):
-                shapekeys = obj.data.shape_keys
-            else:
-                continue
-
-            if not shapekeys.animation_data:
-                continue
-
-            if self.remove_all:
-                for dr in shapekeys.animation_data.drivers:
-                    shapekeys.driver_remove(dr.data_path, -1)
-                continue
-
-            # Only remove drivers from ARKit target shape keys!!!
-            for target_shape in all_target_shapes:
-                dp = 'key_blocks["{}"].value'.format(target_shape)
-                dr = shapekeys.animation_data.drivers.find(dp)
-                if dr:
-                    shapekeys.animation_data.drivers.remove(dr)
-                    if shapekeys.key_blocks.find(target_shape) >= 0:
+                # Only remove drivers from ARKit target shape keys!!!
+                for target_shape in all_target_shapes:
+                    dp = 'key_blocks["{}"].value'.format(target_shape)
+                    dr = shapekeys.animation_data.drivers.find(dp)
+                    if dr:
+                        shapekeys.animation_data.drivers.remove(dr)
                         shapekeys.key_blocks[target_shape].value = 0
+                        clear_any = True
 
-        self.report({'INFO'}, 'Disconnected Control Rig {}'.format(c_rig.name))
+        if not clear_any:
+            self.report({'INFO'}, "No drivers found on the set target objects.")
+        else:
+            if c_rig:
+                self.report({'INFO'}, 'Disconnected Control Rig {}'.format(c_rig.name))
 
         for region in context.area.regions:
             region.tag_redraw()
@@ -182,4 +184,78 @@ class FACEIT_OT_RemoveControlDrivers(bpy.types.Operator):
         scene.frame_set(scene.frame_current)
         scene.tool_settings.use_keyframe_insert_auto = auto_key
 
-        return{'FINISHED'}
+        return {'FINISHED'}
+
+
+class FACEIT_OT_ClearOldCtrlRigData(bpy.types.Operator):
+    '''Find inactive control rigs, remove them and clear eventual drivers.'''
+    bl_idname = 'faceit.clear_old_ctrl_rig_data'
+    bl_label = 'Purge Old Control Rigs and Drivers'
+    bl_options = {'REGISTER', 'UNDO', 'INTERNAL'}
+
+    @classmethod
+    def poll(cls, context):
+        return True
+
+    def execute(self, context):
+        scene = context.scene
+        auto_key = scene.tool_settings.use_keyframe_insert_auto
+        scene.tool_settings.use_keyframe_insert_auto = False
+
+        # Check for control armatures that are not referenced in scene.
+        old_control_rig_objects = []
+
+        for obj in bpy.data.objects:
+            if obj.users == 0:
+                if obj.name not in context.scene.objects:
+                    if 'ctrl_rig_id' in obj:
+                        old_control_rig_objects.append(obj)
+                        continue
+                    else:
+                        if 'FaceitControlRig' in obj.name:
+                            old_control_rig_objects.append(obj)
+        use_faceit_scene_settings_fallback = bool(len(futils.get_faceit_control_armatures()) <= 1)
+
+        for c_rig in old_control_rig_objects:
+            faceit_objects = ctrl_utils.get_crig_objects_list(c_rig)
+            all_target_shapes = rutils.get_all_set_target_shapes(c_rig.faceit_crig_targets)
+            if not faceit_objects:
+                self.report({'WARNING'}, 'Couldn\'t find any target objects. Please update the control rig.')
+                if use_faceit_scene_settings_fallback:
+                    faceit_objects = futils.get_faceit_objects_list()
+            if not all_target_shapes:
+                self.report({'WARNING'}, 'Couldn\'t find any target shapes. Please update the control rig.')
+                if use_faceit_scene_settings_fallback:
+                    all_target_shapes = rutils.get_all_set_target_shapes(scene.faceit_arkit_retarget_shapes)
+
+            for obj in faceit_objects:
+                if shape_key_utils.has_shape_keys(obj):
+                    shapekeys = obj.data.shape_keys
+                else:
+                    continue
+
+                if not shapekeys.animation_data:
+                    continue
+
+                # Only remove drivers from ARKit target shape keys!!!
+                for target_shape in all_target_shapes:
+                    dp = 'key_blocks["{}"].value'.format(target_shape)
+                    dr = shapekeys.animation_data.drivers.find(dp)
+                    if dr:
+                        shapekeys.animation_data.drivers.remove(dr)
+                        shapekeys.key_blocks[target_shape].value = 0
+                        clear_any = True
+            self.report({'INFO'}, 'Removing old Control Rig {}'.format(c_rig.name))
+            c_rig_arma = c_rig.data
+            bpy.data.objects.remove(c_rig)
+            bpy.data.armatures.remove(c_rig_arma)
+
+        for region in context.area.regions:
+            region.tag_redraw()
+
+        clear_invalid_drivers()
+
+        scene.frame_set(scene.frame_current)
+        scene.tool_settings.use_keyframe_insert_auto = auto_key
+
+        return {'FINISHED'}

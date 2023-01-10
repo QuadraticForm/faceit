@@ -116,12 +116,12 @@ class FACEIT_OT_SetupCustomController(bpy.types.Operator):
 
         if not c_rig:
             self.report({'ERROR'}, 'No Control Armature found.')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
         if not c_rig.faceit_crig_targets:
             self.report(
                 {'ERROR'},
                 'No Control Rig target shapes found. Please update the rig or populate the target shapes first.')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         if context.active_object != c_rig:
             futils.set_active_object(c_rig.name)
@@ -142,9 +142,9 @@ class FACEIT_OT_SetupCustomController(bpy.types.Operator):
         custom_slider_utils.generate_extra_sliders(context, self.new_slider, 'full_range' if self.slider_range ==
                                                    'FULL' else 'pos_range', rig_obj=c_rig, overwrite=True)
 
-        face_objects = futils.get_faceit_objects_list()
+        faceit_objects = futils.get_faceit_objects_list()
         connected_any = False
-        for obj in face_objects:
+        for obj in faceit_objects:
 
             shapekeys = obj.data.shape_keys
 
@@ -171,7 +171,7 @@ class FACEIT_OT_SetupCustomController(bpy.types.Operator):
         else:
             self.report({'WARNING'}, 'Wasn\'t able to connect any drivers for the new controller {}.'.format(self.new_slider))
 
-        return{'FINISHED'}
+        return {'FINISHED'}
 
 
 class FACEIT_OT_RemoveCustomController(bpy.types.Operator):
@@ -224,7 +224,7 @@ class FACEIT_OT_RemoveCustomController(bpy.types.Operator):
 
         if not c_rig:
             self.report({'ERROR'}, 'No Control Armature found.')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         if context.active_object != c_rig:
             futils.set_active_object(c_rig.name)
@@ -270,6 +270,6 @@ class FACEIT_OT_RemoveCustomController(bpy.types.Operator):
             crig_targets.remove(found_index)
         else:
             self.report({'ERROR'}, 'Custom Slider not found.')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
-        return{'FINISHED'}
+        return {'FINISHED'}

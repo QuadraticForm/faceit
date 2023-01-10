@@ -2,6 +2,8 @@ import bpy
 import numpy as np
 from mathutils import Vector
 
+from .faceit_data import FACEIT_BONES
+
 
 def get_action_frame_range(action):
     if bpy.app.version <= (3, 1, 0):
@@ -25,7 +27,14 @@ def get_object(name):
     return None
 
 
-def set_active_object(obj):
+def clear_active_object():
+    '''Clears the active object'''
+    if bpy.context.active_object:
+        bpy.context.active_object.select_set(False)
+        bpy.context.view_layer.objects.active = None
+
+
+def set_active_object(obj, select=True):
     '''
     select the object
     @object_name: String or id
@@ -33,11 +42,12 @@ def set_active_object(obj):
     if isinstance(obj, str):
         obj = bpy.data.objects.get(obj)
     if obj:
-        obj.select_set(state=True)
+        if select:
+            obj.select_set(state=True)
         bpy.context.view_layer.objects.active = obj
     else:
         print('WARNING! Object {} does not exist'.format(obj.name))
-        return{'CANCELLED'}
+        return {'CANCELLED'}
 
 
 def clear_object_selection():
@@ -90,11 +100,9 @@ def get_main_faceit_object():
     '''Returns the main object (head or face)'''
     faceit_objects = get_faceit_objects_list()
     for obj in faceit_objects:
-        if obj.vertex_groups.get('faceit_main'):
+        if "faceit_main" in obj.vertex_groups:
             return obj
-
-    if faceit_objects:
-        return faceit_objects[0]
+    return None
 
 
 def get_faceit_objects_list(clear_invalid_objects=True):
@@ -118,6 +126,62 @@ def get_faceit_objects_list(clear_invalid_objects=True):
             remove_item_from_collection_prop(faceit_objects_property_collection, obj_item)
 
     return faceit_objects
+
+
+def set_lock_3d_view_rotations(value):
+    '''Locks the viewport rotation from user input'''
+    for area in bpy.context.screen.areas:
+        if area.type == 'VIEW_3D':
+            for space in area.spaces:
+                space.region_3d.lock_rotation = value
+
+
+def get_region_3d_space(context):
+    '''Returns the region 3d of the current view'''
+    for area in context.screen.areas:
+        if area.type == 'VIEW_3D':
+            for space in area.spaces:
+                if space.type == 'VIEW_3D':
+                    return space.region_3d
+
+
+def get_any_view_locked():
+    '''Returns True if any view is locked'''
+    locked = False
+    for area in bpy.context.screen.areas:
+        if area.type == 'VIEW_3D':
+            for space in area.spaces:
+                if space.type == 'VIEW_3D':
+                    locked = locked or space.region_3d.lock_rotation
+    return locked
+
+
+def ui_refresh_properties():
+    '''Refreshes the properties panel'''
+    for windowManager in bpy.data.window_managers:
+        for window in windowManager.windows:
+            for area in window.screen.areas:
+                if area.type == 'PROPERTIES':
+                    area.tag_redraw()
+
+
+def ui_refresh_view_3d():
+    '''Refreshes the view 3D panel'''
+    for windowManager in bpy.data.window_managers:
+        for window in windowManager.windows:
+            for area in window.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+
+
+def ui_refresh_all():
+    '''Refreshes all panels'''
+    if not hasattr(bpy.data, "window_managers"):
+        return
+    for windowManager in bpy.data.window_managers:
+        for window in windowManager.windows:
+            for area in window.screen.areas:
+                area.tag_redraw()
 
 
 def remove_item_from_collection_prop(collection, item):
@@ -208,41 +272,6 @@ def get_hidden_states(objects_to_hide):
     return objects_hidden
 
 
-def get_modifiers_of_type(obj, type):
-    mods = []
-    for mod in obj.modifiers:
-        if mod.type == type:
-            mods.append(mod)
-    return mods
-
-
-def add_faceit_armature_modifier(obj, rig, force=False, force_original=True):
-    '''add faceit_ARMATURE modifier. Set the rig object as target. reorder and setup. return mod'''
-
-    if rig is None:
-        rig = get_faceit_armature(force_original=force_original)  # bpy.data.objects.get('FaceitRig')
-        if rig is None and not force:
-            return
-
-    if obj is None:
-        return
-
-    mod = get_faceit_armature_modifier(obj, force_original=force_original)
-    if not mod:
-        mod = obj.modifiers.new(name='Faceit_Armature', type='ARMATURE')
-
-    mod.object = rig
-
-    reorder_armature_in_modifier_stack(obj, mod)
-
-    mod.show_on_cage = True
-    mod.show_in_editmode = True
-    mod.show_viewport = True
-    mod.show_render = True
-
-    return mod
-
-
 def get_faceit_control_armatures():
     ctrl_rigs = []
     for obj in bpy.context.scene.objects:
@@ -259,72 +288,46 @@ def get_faceit_control_armature():
     return bpy.context.scene.faceit_control_armature
 
 
+def is_faceit_armature(rig):
+    if rig.type == 'ARMATURE' in rig.name:
+        if all([b in FACEIT_BONES for b in rig.data.bones]):
+            return True
+    return False
+
+
 def get_faceit_armature(force_original=False):
-    rig = bpy.context.scene.faceit_armature  # bpy.futils.get_faceit_armature()
+    '''Get the faceit armature object.'''
+    rig = bpy.context.scene.faceit_armature
     if rig is not None:
         if rig.name not in bpy.context.scene.objects:
             rig = None
     if rig is None or force_original:
-        rig = get_object('FaceitRig')
+        for obj in bpy.data.objects:
+            if obj.type == 'ARMATURE':
+                if is_faceit_original_armature(obj):
+                    rig = obj
+                    break
     return rig
 
 
-def get_faceit_armature_modifier(obj, force_original=True):
-    if obj is None:
-        return
-
-    rig = get_faceit_armature(force_original=force_original)
-
-    rig_name = 'FaceitRig'
-    if rig:
-        rig_name = rig.name
-    for mod in obj.modifiers:
-
-        if mod.type == 'ARMATURE':
-
-            match_object = False
-            if mod.object:
-                match_object = mod.object.name == rig_name
-            match_name = mod.name == 'Faceit_Armature' or mod.name == rig_name
-            if match_name or match_object:
-                return mod
+def is_faceit_original_armature(rig):
+    '''Check if the Faceit Armature is created with Faceit.'''
+    if rig.name == 'FaceitRig':
+        return True
+    if all([b.name in FACEIT_BONES for b in rig.data.bones]):
+        if len(rig.data.bones) >= len(FACEIT_BONES):
+            return True
+    return False
 
 
-def reorder_armature_in_modifier_stack(obj, arm_mod=None):
-
-    if not arm_mod:
-        arm_mod = get_faceit_armature_modifier(obj)
-    if arm_mod:
-        # for _ in range(0, len(arm_mod.modifiers)):
-        safe_count = 100
-        while obj.modifiers.find(arm_mod.name) != 0:
-
-            bpy.ops.object.modifier_move_up({'object': obj}, modifier=arm_mod.name)
-            if safe_count <= 0:
-                break
-            safe_count -= 1
-        # put mirror at first
-        for mod in obj.modifiers:
-            if mod.type in ('MIRROR', 'SURFACE_DEFORM'):
-                safe_count = 100
-                while obj.modifiers.find(mod.name) != 0:
-                    bpy.ops.object.modifier_move_up({'object': obj}, modifier=mod.name)
-                    if safe_count <= 0:
-                        break
-                    safe_count -= 1
-
-
-def apply_modifier(mod_name):
-    if bpy.app.version >= (2, 90, 0):
-        bpy.ops.object.modifier_apply(modifier=mod_name)
-    else:
-        bpy.ops.object.modifier_apply(apply_as='DATA', modifier=mod_name)
-
-
-def get_mouse_select():
-    active_kc = bpy.context.preferences.keymap.active_keyconfig
-    active_pref = bpy.context.window_manager.keyconfigs[active_kc].preferences
-    return getattr(active_pref, 'select_mouse', 'LEFT')
+def is_other_rigify_armature():
+    '''Check if the user wants to use another Rigify face rig for generating the expressions.'''
+    scene = bpy.context.scene
+    rig = scene.faceit_armature
+    if bpy.context.scene.faceit_use_rigify_armature and rig:
+        if not is_faceit_original_armature(rig):
+            return True
+    return False
 
 
 def get_median_pos(locations):
@@ -341,3 +344,48 @@ def exit_nla_tweak_mode(context):
     bpy.context.area.type = 'NLA_EDITOR'
     bpy.ops.nla.tweakmode_exit()
     bpy.context.area.type = current_type
+
+
+def save_scene_state(context):
+    '''Stores the current state of all objects'''
+    hidden_states = get_hidden_states(context.scene.objects)
+    selected_objects = context.selected_objects.copy()
+    active_obj = context.object
+    mode_save = get_object_mode_from_context_mode(context.mode)
+    auto_key = context.scene.tool_settings.use_keyframe_insert_auto
+    context.scene.tool_settings.use_keyframe_insert_auto = False
+    state_dict = {
+        'hidden_states': hidden_states,
+        'selected_objects': selected_objects,
+        'active_obj': active_obj,
+        'mode_save': mode_save,
+        'auto_key': auto_key,
+    }
+    return state_dict
+
+
+def restore_scene_state(context, state_dict):
+    '''Restores the scene state based on the state_dict.'''
+    obj = context.object
+    if obj:
+        if not (obj.hide_get() or obj.hide_viewport):
+            bpy.ops.object.mode_set(mode='OBJECT')
+    clear_object_selection()
+    hidden_states = state_dict['hidden_states']
+    selected_objects = state_dict['selected_objects']
+    active_obj = state_dict['active_obj']
+    mode_save = state_dict['mode_save']
+    auto_key = state_dict['auto_key']
+    set_hidden_states(hidden_states)
+    for obj in selected_objects:
+        if obj:
+            obj.select_set(True)
+    if active_obj:
+        try:
+            set_active_object(active_obj.name, select=False)
+            bpy.ops.object.mode_set(mode=mode_save)
+        except RuntimeError:
+            pass
+    else:
+        clear_active_object()
+    context.scene.tool_settings.use_keyframe_insert_auto = auto_key

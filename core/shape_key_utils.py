@@ -3,9 +3,30 @@ import re
 
 import bpy
 import numpy as np
-
+from mathutils import Matrix
 from . import faceit_utils as futils
 from . import fc_dr_utils
+
+
+def apply_matrix_to_all_mesh_data(mesh_data, matrix):
+    '''Apply a matrix to all mesh data'''
+    # Apply matrix to mesh data
+    mesh_data = np.matmul(mesh_data, matrix.to_3x3().transposed())
+    mesh_data += matrix.translation
+    return mesh_data
+
+
+def get_mesh_data(obj, dg=None, evaluated=True):
+    '''Get evaluated or basis shape data'''
+    if evaluated:
+        verts = obj.evaluated_get(dg).data.vertices
+    else:
+        verts = obj.data.vertices
+    vert_count = len(verts)
+    data = np.zeros(vert_count * 3, dtype=np.float32)
+    verts.foreach_get('co', data.ravel())
+    data = data.reshape(vert_count, 3)
+    return data
 
 
 def has_shape_keys(obj):
@@ -16,16 +37,22 @@ def has_shape_keys(obj):
         return False
 
 
-def set_rest_position_shape_keys(objects=None) -> None:
+def set_rest_position_shape_keys(objects=None, expressions_filter=None) -> None:
     '''Set all shape keys to default 0.0 value'''
     auto_key = bpy.context.scene.tool_settings.use_keyframe_insert_auto
+    bpy.context.scene.tool_settings.use_keyframe_insert_auto = False
 
     if objects is None:
         objects = futils.get_faceit_objects_list()
     for obj in objects:
         if has_shape_keys(obj):
-            for sk in obj.data.shape_keys.key_blocks:
-                sk.value = 0
+            if expressions_filter:
+                for sk in obj.data.shape_keys.key_blocks:
+                    if sk.name in expressions_filter:
+                        sk.value = 0.0
+            else:
+                for sk in obj.data.shape_keys.key_blocks:
+                    sk.value = 0
 
     bpy.context.scene.tool_settings.use_keyframe_insert_auto = auto_key
 
@@ -89,7 +116,7 @@ def get_shape_keys_from_faceit_objects_enum(self, context):
     shapes = []
 
     if context is None:
-        print('get_shape_keys_from_main_object --> Context is None')
+        print('get_shape_keys_from_faceit_objects_enum --> Context is None')
         return shapes
     faceit_objects = futils.get_faceit_objects_list()
 
@@ -131,7 +158,6 @@ def store_shape_keys(obj):
             for dr in src_shape_keys.animation_data.drivers:
                 if 'key_blocks["{}"].'.format(sk.name) in dr.data_path:
                     stored_drivers.append(fc_dr_utils.copy_driver_data(dr))
-
         sk_dict[sk.name] = {
             'data': sk_shape_data,
             'drivers': stored_drivers,
@@ -185,10 +211,11 @@ def apply_shape_key_from_data(obj, shapekey_name, sk_data, relative_key, apply_d
     sk_shape_data = sk_data['data']
     new_sk.data.foreach_set('co', sk_shape_data.ravel())
     # Load the Meta Datanew_sk.value = sk_data.get('value', new_sk.value)
-    new_sk.mute = sk_data.get('mute', new_sk.mute)
-    new_sk.relative_key = relative_key or sk_data.get('relative_key', new_sk.relative_key)
     new_sk.slider_min = sk_data.get('slider_min', new_sk.slider_min)
     new_sk.slider_max = sk_data.get('slider_max', new_sk.slider_max)
+    new_sk.mute = sk_data.get('mute', new_sk.mute)
+    new_sk.value = sk_data.get('value', new_sk.value)
+    new_sk.relative_key = relative_key or sk_data.get('relative_key', new_sk.relative_key)
     new_sk.vertex_group = sk_data.get('vertex_group', new_sk.vertex_group)
     new_sk.interpolation = sk_data.get('interpolation', new_sk.interpolation)
 

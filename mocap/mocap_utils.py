@@ -1,39 +1,19 @@
 
-import csv
-import json
 import bpy
 import numpy as np
-
 from ..core.fc_dr_utils import kf_data_to_numpy_array, populate_keyframe_points_from_np_array
+from datetime import datetime
 
 
-def convert_timecode_to_frames(timecode, framerate, start=None):
-    '''This function converts an SMPTE timecode into frames
-    @timecode [str]: format hh:mm:ss:ff
-    @start [str]: optional timecode to start at
-    '''
-    # recording fps
-    recorded_framerate = 1 / 60
+def get_current_timestamp():
+    '''Returns the current timestamp as a string.'''
+    timeObj = datetime.now()
+    return timeObj.strftime("%H:%M:%S.%f")
 
-    def _seconds(value):
-        '''convert value to seconds
-        @value [str, int, float]: either timecode or frames
-        '''
-        if isinstance(value, str):  # value seems to be a timestamp
-            _zip_ft = zip((3600, 60, 1, recorded_framerate), value.split(':'))
-            return sum(f * float(t) for f, t in _zip_ft)
-        elif isinstance(value, (int, float)):  # frames
-            return value / framerate
-        else:
-            return 0
 
-    def _frames(seconds):
-        '''convert seconds to frames
-        @seconds [int]: the number of seconds
-        '''
-        return seconds * framerate
-
-    return _frames(_seconds(timecode) - _seconds(start))
+def get_scene_frame_rate():
+    '''Returns the current framerate'''
+    return bpy.context.scene.render.fps / bpy.context.scene.render.fps_base
 
 
 def add_zero_keyframe(fcurves, frame) -> None:

@@ -170,10 +170,11 @@ def get_eye_dimensions(rig) -> Tuple:
     return distance_L, distance_R
 
 
-def scale_eye_animation(rig, eye_dim_L_old, eye_dim_R_old) -> None:
+def scale_eye_animation(rig, eye_dim_L_old, eye_dim_R_old, action=None) -> None:
     '''Scale the eye animation (all keyframes)'''
 
-    action = rig.animation_data.action
+    if not action:
+        action = rig.animation_data.action
     if not action:
         return
 
@@ -199,6 +200,23 @@ def scale_eye_animation(rig, eye_dim_L_old, eye_dim_R_old) -> None:
         action,
         filter_pose_bone_names=(top_lid_pose_bones + bot_lid_pose_bones),
         scale_factor=scale_factor_R
+    )
+
+
+def scale_anime_eye_animation(rig, scale_factor=0.25, action=None,) -> None:
+    '''Scale the anime eye animation (all keyframes)'''
+
+    if not action:
+        action = rig.animation_data.action
+    if not action:
+        return
+
+    eye_bones = ["eye.R", "eye.L"]
+
+    amplify_pose(
+        action,
+        filter_pose_bone_names=(eye_bones),
+        scale_factor=scale_factor
     )
 
 
@@ -412,10 +430,23 @@ def get_default_fc_value(data_path, idx=-1):
     return val
 
 
-def reset_key_frame(action, backup_action, frame):
+def reset_key_frame(action, filter_pose_bone_names, backup_action, frame):
     ''' reset keyframe on overwrite action to original value in shape action (undo edits) '''
 
-    for fc in action.fcurves:
+    fcurves = []
+    if filter_pose_bone_names:
+        for bone_name in filter_pose_bone_names:
+            base_dp = f'pose.bones["{bone_name}"].'
+            data_paths = [base_dp + 'location', base_dp + 'rotation_euler']
+            for dp in data_paths:
+                for i in range(3):
+                    fc = action.fcurves.find(dp, index=i)
+                    if fc:
+                        fcurves.append(fc)
+    else:
+        fcurves = action.fcurves
+
+    for fc in fcurves:
         if frame in ([kf.co.x for kf in fc.keyframe_points]):
             dp = fc.data_path
             array_idx = fc.array_index

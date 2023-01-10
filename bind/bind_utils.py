@@ -1,5 +1,7 @@
 import bpy
 import bmesh
+
+from ..core.modifier_utils import get_modifiers_of_type
 from ..core import mesh_utils
 from ..core import faceit_utils as futils
 from ..core import vgroup_utils as vg_utils
@@ -96,7 +98,6 @@ def scale_bind_objects(factor, objects, reverse=False,):
     # select all facial objects
     for obj in objects:
         futils.set_active_object(obj.name)
-        obj.lock_scale[:] = (False,) * 3
     bpy.ops.transform.resize(value=scale_factor, orient_type='GLOBAL')
 
 
@@ -113,7 +114,7 @@ def data_transfer_vertex_groups(obj_from, obj_to, apply=True, method=''):
     if method:
         data_mod.vert_mapping = method
     else:
-        if futils.get_modifiers_of_type(obj_to, 'MIRROR'):
+        if get_modifiers_of_type(obj_to, 'MIRROR'):
             data_mod.vert_mapping = 'NEAREST'
         else:
             data_mod.vert_mapping = 'TOPOLOGY'
@@ -194,9 +195,9 @@ def split_object(obj):
     return split_objects
 
 
-def check_main_faceit_group(main_obj, face_objects):
+def check_main_faceit_group(main_obj, faceit_objects):
 
-    if any(['faceit_main' in ob.vertex_groups for ob in face_objects]):
+    if any(['faceit_main' in ob.vertex_groups for ob in faceit_objects]):
         # All good, go on
         return True
     else:

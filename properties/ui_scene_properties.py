@@ -1,11 +1,7 @@
 from bpy.props import (BoolProperty, EnumProperty, PointerProperty,
                        StringProperty)
 from bpy.types import PropertyGroup, Scene
-
-# --------------- FUNCTIONS --------------------
-# | - Update/Getter/Setter/Items
-# ----------------------------------------------
-
+from ..core.faceit_utils import is_faceit_original_armature, is_other_rigify_armature
 
 workspace_tab_dict = {
     'ALL': (
@@ -33,7 +29,13 @@ workspace_tab_dict = {
 
 
 def _get_tab_items_from_workspace(self, context):
-    return workspace_tab_dict[self.workspace]
+    workspaces = workspace_tab_dict[self.workspace]
+    rig = context.scene.faceit_armature
+    if rig is not None:
+        if not is_faceit_original_armature(rig):
+            rig_tab_item = ('CREATE', 'Rig', 'Create Tab')
+            return [x for x in workspaces if x != rig_tab_item]
+    return workspaces
 
 
 def update_tab(self, context):
@@ -48,11 +50,6 @@ def update_tab(self, context):
     elif self.workspace == 'MOCAP':
         self.mocap_tab = self.active_tab
 
-    # if self.active_tab == 'SETUP':
-    #     activate_setup_panel()
-    # else:
-    #     deactivate_setup_panel()
-
 
 def update_workspace(self, context):
 
@@ -63,61 +60,38 @@ def update_workspace(self, context):
     elif self.workspace == 'MOCAP':
         self.active_tab = self.mocap_tab
 
-    # if self.active_tab == 'SETUP':
-    #     activate_setup_panel()
-    # else:
-    #     deactivate_setup_panel()
-
-
-# def activate_setup_panel():
-#     if setup_panel_change_listener not in bpy.app.handlers.depsgraph_update_post:
-#         bpy.app.handlers.depsgraph_update_post.append(setup_panel_change_listener)
-
-
-# def deactivate_setup_panel():
-#     if setup_panel_change_listener in bpy.app.handlers.depsgraph_update_post:
-#         bpy.app.handlers.depsgraph_update_post.remove(setup_panel_change_listener)
-
-# --------------- CLASSES --------------------
-# | - Property Groups (Collection-/PointerProperty)
-# ----------------------------------------------
 
 class PinPanels(PropertyGroup):
     # Setup
     FACEIT_PT_SetupRegister: BoolProperty()
     FACEIT_PT_SetupVertexGroups: BoolProperty()
+    FACEIT_PT_BodyRigSetup: BoolProperty()
     # Rigging
     FACEIT_PT_Rigging: BoolProperty()
     FACEIT_PT_Landmarks: BoolProperty()
     # Expressoins
     FACEIT_PT_Expressions: BoolProperty()
     FACEIT_PT_ExpressionOptions: BoolProperty()
-
     # Bake Panel (Utils)
     FACEIT_PT_BakeExpressions: BoolProperty()
     FACEIT_PT_ShapeKeyUtils: BoolProperty()
     FACEIT_PT_Finalize: BoolProperty()
     FACEIT_PT_RigUtils: BoolProperty()
     FACEIT_PT_Other: BoolProperty()
-    FACEIT_PT_ControlRig: BoolProperty()
     # ARKit Shapes
     FACEIT_PT_TargetShapeLists: BoolProperty()
     FACEIT_PT_RetargetShapesSetup: BoolProperty()
     # Control Rig
+    FACEIT_PT_ControlRig: BoolProperty()
     FACEIT_PT_ControlRigSettings: BoolProperty()
+    FACEIT_PT_ControlRigAnimation: BoolProperty()
     FACEIT_PT_ControlRigUtils: BoolProperty()
     FACEIT_PT_ControlRigTargetShapes: BoolProperty()
     FACEIT_PT_ControlRigTargetObjects: BoolProperty()
     # Mocap
-    FACEIT_PT_MocapSettings: BoolProperty()
     FACEIT_PT_MocapUtils: BoolProperty()
-    FACEIT_PT_RetargetFBX: BoolProperty()
-    FACEIT_PT_MocapFaceCap: BoolProperty()
-    FACEIT_PT_MocapEpic: BoolProperty()
-    FACEIT_PT_FaceCapText: BoolProperty()
-    FACEIT_PT_FaceCapLive: BoolProperty()
-    FACEIT_PT_MocapA2F: BoolProperty()
-    FACEIT_PT_MocapJson: BoolProperty()
+    FACEIT_PT_MocapImporters: BoolProperty()
+    FACEIT_PT_MocapOSC: BoolProperty()
 
     def get_pin(self, panel_idname):
         return getattr(self, panel_idname, 0)
@@ -139,18 +113,18 @@ class FaceitWorkspace(PropertyGroup):
         items=_get_tab_items_from_workspace,
         update=update_tab,
     )
-
-    # Store Value based on workspace
     all_tab: StringProperty(
-        default='SETUP'
+        default='SETUP',
+        description='The active tab when the ALL workspace.'
     )
     rig_tab: StringProperty(
         default='SETUP',
+        description='The active tab when the RIG workspace.'
     )
     mocap_tab: StringProperty(
         default='SETUP',
+        description='The active tab in the MOCAP Workspace',
     )
-
     expand_ui: BoolProperty()
 
 
@@ -164,58 +138,10 @@ def register():
     Scene.faceit_workspace = PointerProperty(
         type=FaceitWorkspace,
     )
-
-    ############## Utilities ##################
-
-    Scene.faceit_shape_key_utils_expand_ui = BoolProperty(
-        name='Faceit Utilities',
-        default=False
-    )
-    Scene.faceit_finalize_utils_expand_ui = BoolProperty(
-        name='Faceit Utilities',
-        default=False
-    )
-    Scene.faceit_other_utilities_expand_ui = BoolProperty(
-        name='Faceit Utilities',
-        default=False
-    )
-    Scene.faceit_expression_options_expand_ui = BoolProperty(
-        name='Options',
-        default=True
-    )
     Scene.faceit_expression_init_expand_ui = BoolProperty(
         name='Initialize',
         default=True
     )
-
-    Scene.faceit_control_rig_expand_ui = BoolProperty(
-        default=True
-    )
-
-    Scene.faceit_crig_target_shapes_expand_ui = BoolProperty(
-        default=True
-    )
-
-    Scene.faceit_crig_target_objects_expand_ui = BoolProperty(
-        default=True
-    )
-
-    Scene.faceit_crig_target_settings_expand_ui = BoolProperty(
-        default=True
-    )
-
-    Scene.faceit_crig_landmarks_expand_ui = BoolProperty(
-        default=False
-    )
-
-    Scene.faceit_mocap_general_expand_ui = BoolProperty(
-        default=False
-    )
-
-    Scene.faceit_mocap_action_expand_ui = BoolProperty(
-        default=False
-    )
-
     Scene.faceit_pin_panels = PointerProperty(
         name='Pin Props',
         type=PinPanels,
@@ -223,15 +149,6 @@ def register():
 
 
 def unregister():
-    # if setup_panel_change_listener in bpy.app.handlers.depsgraph_update_post:
-    #     bpy.app.handlers.depsgraph_update_post.remove(setup_panel_change_listener)
-
     del Scene.faceit_workspace
-    del Scene.faceit_other_utilities_expand_ui
-    del Scene.faceit_shape_key_utils_expand_ui
-    del Scene.faceit_finalize_utils_expand_ui
-    del Scene.faceit_control_rig_expand_ui
-    del Scene.faceit_crig_landmarks_expand_ui
-    del Scene.faceit_mocap_general_expand_ui
-    del Scene.faceit_mocap_action_expand_ui
+    del Scene.faceit_expression_init_expand_ui
     del Scene.faceit_pin_panels

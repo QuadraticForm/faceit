@@ -1,6 +1,8 @@
 import bpy
-from bpy.props import BoolProperty, EnumProperty, StringProperty
-from bpy.types import UI_UL_list
+
+from .draw_utils import draw_text_block
+
+from ..core.faceit_utils import get_object, get_faceit_control_armature
 
 from ..core.retarget_list_base import (DrawRegionsFilterBase,
                                        DrawTargetShapesListBase,
@@ -12,7 +14,7 @@ from .ui import FACEIT_PT_Base, FACEIT_PT_BaseSub
 
 
 class FACEIT_PT_BaseCtrl(FACEIT_PT_Base):
-    UI_TAB = 'CONTROL'
+    UI_TABS = ('CONTROL',)
 
 
 class FACEIT_PT_ControlRig(FACEIT_PT_BaseCtrl, bpy.types.Panel):
@@ -29,26 +31,76 @@ class FACEIT_PT_ControlRig(FACEIT_PT_BaseCtrl, bpy.types.Panel):
         scene = context.scene
 
         col = layout.column(align=True)
-        # draw_utils.draw_panel_dropdown_expander(row, scene, 'faceit_control_rig_expand_ui', 'Control Rig')
         # draw_utils.draw_web_link(row, 'https://faceit-doc.readthedocs.io/en/latest/control_rig/')
-
-        # if scene.faceit_control_rig_expand_ui:
-
+        found_old_c_rigs = False
+        for obj in bpy.data.objects:
+            if obj.users == 0:
+                if obj.name not in context.scene.objects:
+                    if 'ctrl_rig_id' in obj:
+                        found_old_c_rigs = True
+                        break
+                    else:
+                        if 'FaceitControlRig' in obj.name:
+                            found_old_c_rigs = True
+                            break
+        if found_old_c_rigs:
+            row = col.row(align=True)
+            row.label(text='Cleanup')
+            row = col.row(align=True)
+            row.operator('faceit.clear_old_ctrl_rig_data', icon='TRASH')
         row = col.row(align=True)
         row.label(text='Generate')
-
         row = col.row(align=True)
         row.prop(scene, 'faceit_control_armature', text='', icon='OBJECT_DATA')
-
         row = col.row(align=True)
         row.operator('faceit.generate_control_rig', icon='CON_ARMATURE')
+        ctrl_rig = context.scene.faceit_control_armature
+        if ctrl_rig:
+            row = col.row(align=True)
+            row.label(text='Drivers')
 
-        row = col.row(align=True)
-        row.label(text='Drivers')
+            row = col.row(align=True)
+            row.operator('faceit.setup_control_drivers', text='Connect', icon='LINKED')
+            # text = "Disconnect" if scene.faceit_control_armature else "Clear Drivers"
+            row.operator('faceit.remove_control_drivers', text="Diconnect", icon='UNLINKED')
 
+        if scene.faceit_face_objects:
+            row = col.row()
+            row.label(text="Landmarks")
+            if scene.faceit_pin_panels.FACEIT_PT_Landmarks:
+                icon = 'PINNED'
+            else:
+                icon = 'UNPINNED'
+            row = col.row()
+            row.prop(scene, "faceit_show_landmarks_ctrl_rig", text="Show Landmark Panel", icon=icon)
+
+
+class FACEIT_PT_ControlRigAnimation(FACEIT_PT_BaseCtrl, bpy.types.Panel):
+    bl_label = 'Animation & Baking'
+    bl_idname = 'FACEIT_PT_ControlRigAnimation'
+    bl_options = set()
+    faceit_predecessor = 'FACEIT_PT_ControlRig'
+
+    @classmethod
+    def poll(cls, context):
+        if context.scene.faceit_control_armature:
+            return super().poll(context)
+
+    def draw(self, context):
+        col = self.layout.column(align=True)
+        row = col.row()
+        ctrl_rig = context.scene.faceit_control_armature
         row = col.row(align=True)
-        row.operator('faceit.setup_control_drivers', text='Connect', icon='LINKED')
-        row.operator('faceit.remove_control_drivers', text='Disconnect', icon='UNLINKED')
+        row.label(text='Active Action')
+        row = col.row(align=True)
+        if ctrl_rig.animation_data:
+            row.prop(ctrl_rig.animation_data, 'action', text='')
+            mocap_action = ctrl_rig.animation_data.action
+            if mocap_action:
+                row.prop(mocap_action, "use_fake_user", text="", icon='FAKE_USER_OFF')
+            row.operator('faceit.new_ctrl_rig_action', text="New Ctrl Rig Action", icon='ADD')
+        else:
+            row.operator('faceit.new_ctrl_rig_action', text="Create Ctrl Rig Action", icon='ADD')
 
         row = col.row(align=True)
         row.label(text='Bake Action')
@@ -69,7 +121,8 @@ class FACEIT_PT_ControlRigUtils(FACEIT_PT_BaseSub, bpy.types.Panel):
 
     @classmethod
     def poll(cls, context):
-        return super().poll(context)
+        if context.scene.faceit_control_armature:
+            return super().poll(context)
 
 
 class FACEIT_PT_ControlRigControllers(FACEIT_PT_BaseSub, bpy.types.Panel):
@@ -77,6 +130,7 @@ class FACEIT_PT_ControlRigControllers(FACEIT_PT_BaseSub, bpy.types.Panel):
     bl_idname = 'FACEIT_PT_ControlRigControllers'
     bl_parent_id = 'FACEIT_PT_ControlRigUtils'
     # bl_options = set()
+    faceit_predecessor = 'FACEIT_PT_ControlRigActiveAction'
 
     @classmethod
     def poll(cls, context):
@@ -102,7 +156,7 @@ class FACEIT_PT_ControlRigExperimental(FACEIT_PT_BaseSub, bpy.types.Panel):
     bl_idname = 'FACEIT_PT_ControlRigExperimental'
     bl_parent_id = 'FACEIT_PT_ControlRigUtils'
     # bl_options = set()
-    faceit_predecessor = 'FACEIT_PT_ControlRigUtils'
+    faceit_predecessor = 'FACEIT_PT_ControlRigControllers'
 
     @classmethod
     def poll(cls, context):
@@ -124,12 +178,10 @@ class FACEIT_PT_ControlRigExperimental(FACEIT_PT_BaseSub, bpy.types.Panel):
 class FACEIT_PT_ControlRigTargetShapes(FACEIT_PT_BaseCtrl, bpy.types.Panel):
     bl_label = 'Target Shapes'
     bl_idname = 'FACEIT_PT_ControlRigTargetShapes'
-    # bl_options = set()
     faceit_predecessor = 'FACEIT_PT_ControlRigUtils'
 
     @classmethod
     def poll(cls, context):
-
         c_rig = context.scene.faceit_control_armature
         if c_rig:
             return super().poll(context) and c_rig.faceit_crig_targets
@@ -137,33 +189,24 @@ class FACEIT_PT_ControlRigTargetShapes(FACEIT_PT_BaseCtrl, bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         scene = context.scene
-
         col = layout.column(align=True)
         c_rig = scene.faceit_control_armature
-
         # draw_utils.draw_web_link(row, 'https://faceit-doc.readthedocs.io/en/latest/control_rig/')
-
         ctrl_rig_version = c_rig.get('ctrl_rig_version', 1.0)
         if ctrl_rig_version < 1.2:
             row = col.row(align=True)
             row.operator('faceit.update_control_rig', icon='FILE_REFRESH')
         else:
-
             row = col.row(align=True)
             row.operator('faceit.load_crig_settings_from_scene', icon='SORT_ASC')
             row.operator('faceit.load_faceit_settings_from_crig', icon='SORT_DESC')
-
             col.separator()
-
             col_retarget = col.column()
             col_retarget.use_property_decorate = True
             row.use_property_split = True
-
-            if scene.faceit_crig_target_shapes_expand_ui:
-                if c_rig.faceit_crig_targets:
-                    row = col_retarget.row(align=True)
-                    row.template_list('FACEIT_UL_RetargetControlRigList', '', c_rig,
-                                      'faceit_crig_targets', c_rig, 'faceit_crig_targets_index')
+            row = col_retarget.row(align=True)
+            row.template_list('FACEIT_UL_RetargetControlRigList', '', c_rig,
+                              'faceit_crig_targets', c_rig, 'faceit_crig_targets_index')
 
 
 class FACEIT_PT_ControlRigTargetObjects(FACEIT_PT_BaseCtrl, bpy.types.Panel):

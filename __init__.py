@@ -17,17 +17,19 @@
 # ***** END GPL LICENCE BLOCK *****
 
 import bpy
+
+from .landmarks.landmarks_utils import unlock_3d_view
 from . import auto_load
 from bpy.props import IntProperty
 
 bl_info = {
     'name': 'FACEIT',
     'author': 'Fynn Braren',
-    'description': 'Semi-automatically generate IPhoneX Shape Keys - Performance Capture for ANY Character! ',
+    'description': 'Facial Expressions And Performance Capture',
     'blender': (2, 80, 0),
-    'version': (2, 1, 2),
+    'version': (2, 1, 39),
     'location': 'View3D',
-    'warning': '',
+    'warning': 'Beta version - don\'t use in production environment!',
     'wiki_url': "https://faceit-doc.readthedocs.io/en/latest/",
     'tracker_url': "https://faceit-doc.readthedocs.io/en/latest/support/",
     'category': 'Animation'
@@ -35,6 +37,21 @@ bl_info = {
 
 
 auto_load.init()
+
+
+def update_use_vertex_size_scaling(self, context):
+    if self.use_vertex_size_scaling:
+        lm_obj = context.scene.objects.get("facial_landmarks")
+        if lm_obj:
+            if not (lm_obj.hide_get() or lm_obj.hide_viewport):
+                context.preferences.themes[0].view_3d.vertex_size = self.landmarks_vertex_size
+    else:
+        context.preferences.themes[0].view_3d.vertex_size = self.default_vertex_size
+
+
+def update_auto_lock_3d_view(self, context):
+    if not self.auto_lock_3d_view:
+        unlock_3d_view()
 
 
 class FaceitPreferences(bpy.types.AddonPreferences):
@@ -46,9 +63,61 @@ class FaceitPreferences(bpy.types.AddonPreferences):
         default=True,
     )
 
+    use_vertex_size_scaling: bpy.props.BoolProperty(
+        name='Landmark Vertex Scaling',
+        description='The vertex size will be scaled according to the Landmark Vertex Size during landmark editing. The value will be reset to the Default Size, after applying or resetting the landmarks',
+        default=True,
+        update=update_use_vertex_size_scaling
+    )
+    default_vertex_size: bpy.props.IntProperty(
+        name="Default Vertex Size",
+        description="Vertex Size in Theme Settings (3D view). Set your preferred vertex size.",
+        default=3,
+        min=1,
+        max=10,
+        subtype='PIXEL',
+        update=update_use_vertex_size_scaling
+    )
+
+    landmarks_vertex_size: bpy.props.IntProperty(
+        name="Landmarks Vertex Size",
+        description="Vertex Size in Theme Settings (3D view). Set your preferred vertex size.",
+        default=8,
+        min=1,
+        max=10,
+        subtype='PIXEL',
+        update=update_use_vertex_size_scaling
+    )
+    auto_lock_3d_view: bpy.props.BoolProperty(
+        name="Auto Lock 3D View",
+        description="Automatically lock the 3D view during Landmarks placement",
+        default=True,
+        update=update_auto_lock_3d_view
+    )
+
     def draw(self, context):
         layout = self.layout
-        layout.prop(self, 'web_links', icon='INFO')
+        col = layout.column(align=True)
+        col.use_property_split = True
+        col.use_property_decorate = False
+        row = col.row(align=True)
+        row.prop(self, 'web_links', icon='QUESTION')  # INFO
+
+        col.separator()
+        # col.use_property_split = False
+        row = col.row(align=True)
+        row.label(text="Landmark Settings")
+        row = col.row(align=True)
+        row.prop(self, "use_vertex_size_scaling", icon='PROP_OFF')
+        if self.use_vertex_size_scaling:
+            # col.use_property_split = True
+            row = col.row(align=True)
+            row.prop(self, "default_vertex_size")
+            row = col.row(align=True)
+            row.prop(self, "landmarks_vertex_size")
+        col.separator()
+        row = col.row()
+        row.prop(self, "auto_lock_3d_view", icon='RESTRICT_VIEW_ON')
 
 
 def register():
@@ -69,4 +138,4 @@ def register():
 def unregister():
     bpy.utils.unregister_class(FaceitPreferences)
     auto_load.unregister()
-    bpy.types.Scene.faceit_version
+    del bpy.types.Scene.faceit_version

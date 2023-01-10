@@ -1,9 +1,8 @@
 
 import bpy
 
-from ..core.faceit_utils import (get_faceit_armature,
-                                 get_faceit_armature_modifier,
-                                 get_faceit_objects_list, get_hide_obj, get_object)
+from ..core.faceit_utils import (get_faceit_armature, get_faceit_objects_list, get_hide_obj, get_object)
+from ..core.modifier_utils import get_faceit_armature_modifier
 from ..core.shape_key_utils import has_shape_keys
 from . import corrective_shape_keys_utils
 
@@ -33,7 +32,7 @@ class FACEIT_OT_ReevaluateCorrectiveShapeKeys(bpy.types.Operator):
 
         self.report({'INFO'}, 'Re-evaluated the corrective shape keys.')
 
-        return{'FINISHED'}
+        return {'FINISHED'}
 
 
 class FACEIT_OT_AddCorrectiveShapeKeyToExpression(bpy.types.Operator):
@@ -58,48 +57,33 @@ class FACEIT_OT_AddCorrectiveShapeKeyToExpression(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
-
         obj = context.object
-
         if not obj:
             self.report({'ERROR'}, 'Select an Object first!')
-            return{'CANCELLED'}
-
+            return {'CANCELLED'}
         if not get_faceit_armature_modifier(obj, force_original=False):
             self.report({'ERROR'}, 'The selected Object is not bound to the FaceitRig!')
-            return{'CANCELLED'}
-
+            return {'CANCELLED'}
         expression_list = scene.faceit_expression_list
-
         if not self.expression:
-            return{'CANCELLED'}
-
-        print(self.expression)
-
+            return {'CANCELLED'}
         exp = expression_list.get(self.expression)
         if not exp:
             self.report({'WARNING'}, 'Expression not found')
-            return{'CANCELLED'}
-
+            return {'CANCELLED'}
         exp_index = expression_list.find(exp.name)
-
         sk_name = 'faceit_cc_' + exp.name
-
         if context.mode == 'SCULPT':
             bpy.ops.object.mode_set()
             if obj.active_shape_key.name == sk_name:
-                return{'FINISHED'}
-
+                return {'FINISHED'}
         frame = exp.frame
         scene.frame_current = frame
         scene.faceit_expression_list_index = exp_index
         mirror_x = (exp.mirror_name == '')
-
         obj.data.use_mirror_x = mirror_x
         obj.show_only_shape_key = False
-
         bpy.ops.object.mode_set(mode='SCULPT')
-
         # Add Shape Key
         has_sk = has_shape_keys(obj)
         if not has_sk:
@@ -111,15 +95,12 @@ class FACEIT_OT_AddCorrectiveShapeKeyToExpression(bpy.types.Operator):
             sk = obj.data.shape_keys.key_blocks.get(sk_name)
             if not sk:
                 sk = obj.shape_key_add(name=sk_name, from_mix=False)
-
         exp.corr_shape_key = True
-
         corrective_shape_keys_utils.assign_corrective_sk_action(obj)
         corrective_shape_keys_utils.keyframe_corrective_sk_action(exp)
-
         obj.active_shape_key_index = obj.data.shape_keys.key_blocks.find(sk.name)
 
-        return{'FINISHED'}
+        return {'FINISHED'}
 
 
 def get_objects_with_corrective_sk_enum(self, context):
@@ -131,7 +112,6 @@ def get_objects_with_corrective_sk_enum(self, context):
         return objects
 
     found_objects = corrective_shape_keys_utils.get_objects_with_corrective_shape_key_for_expression(self.expression)
-    # print(found_objects)
     txt = 'Remove from'
     if found_objects:
         idx = 0
@@ -144,7 +124,6 @@ def get_objects_with_corrective_sk_enum(self, context):
             idx += 1
     else:
         objects.append(('None', 'None', 'None'))
-    # print(objects)
     return objects
 
 
@@ -199,7 +178,7 @@ class FACEIT_OT_RemoveCorrectiveShapeKey(bpy.types.Operator):
         exp = expression_list.get(self.expression)
         if not exp:
             self.report({'WARNING'}, 'Expression not found')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         frame = exp.frame
         scene.frame_current = frame
@@ -213,7 +192,7 @@ class FACEIT_OT_RemoveCorrectiveShapeKey(bpy.types.Operator):
         else:
             self.report({'WARNING'}, f'No corrective sculpt found for {objects_txt}')
 
-        return{'FINISHED'}
+        return {'FINISHED'}
 
 
 class FACEIT_OT_ClearCorrectiveShapeKeys(bpy.types.Operator):
@@ -245,4 +224,4 @@ class FACEIT_OT_ClearCorrectiveShapeKeys(bpy.types.Operator):
         else:
             corrective_shape_keys_utils.clear_all_corrective_shape_keys(faceit_objects, expression_list=expression_list)
 
-        return{'FINISHED'}
+        return {'FINISHED'}

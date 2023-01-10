@@ -3,6 +3,30 @@ from math import acos, pi
 import bmesh
 import bpy
 
+from .vgroup_utils import get_verts_in_vgroup
+
+
+def get_max_dim_in_direction(obj, direction, vertex_group_name=None):
+    '''Get the furthest point of the mesh in a specified direction'''
+    # world matrix
+    mat = obj.matrix_world
+    far_distance = 0
+    far_point = direction
+
+    if vertex_group_name:
+        vs = get_verts_in_vgroup(obj, vertex_group_name)
+    else:
+        vs = obj.data.vertices
+
+    for v in vs:
+        point = mat @ v.co
+        temp = direction.dot(point)
+        # new high?
+        if far_distance < temp:
+            far_distance = temp
+            far_point = point
+    return far_point
+
 
 def is_inside_dot(target_pt_global, mesh_obj, tolerance=0.05):
     '''
@@ -135,6 +159,15 @@ def select_vertices(obj, vs=[], flush_selection=False):
         bm.select_mode = {'VERT', 'EDGE', 'FACE'}
         bm.select_flush_mode()
         bpy.ops.object.mode_set()
+
+
+def get_object_center(obj):
+    vcos = [obj.matrix_world @ v.co for v in obj.data.vertices]
+    def findCenter(l): return (max(l) + min(l)) / 2
+
+    x, y, z = [[v[i] for v in vcos] for i in range(3)]
+    center = [findCenter(axis) for axis in [x, y, z]]
+    return center
 
 
 def unselect_flush_vert_selection(obj):

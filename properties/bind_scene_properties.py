@@ -1,28 +1,8 @@
-import bpy
-from bpy.props import (BoolProperty, EnumProperty, PointerProperty,
-                       StringProperty)
-from bpy.types import Bone, Object, Scene
-
-
-def is_armature_poll(self, obj):
-    scene = bpy.context.scene
-    if obj.type == 'ARMATURE' and obj.name in scene.objects:
-        if obj != scene.faceit_armature:
-            return True
+from bpy.props import (BoolProperty)
+from bpy.types import Scene
 
 
 def register():
-
-    Scene.faceit_body_armature = PointerProperty(
-        name='Body Armature',
-        type=Object,
-        poll=is_armature_poll,
-    )
-
-    Scene.faceit_body_armature_head_bone = StringProperty(
-        name='Bone',
-        default='',
-    )
 
     Scene.faceit_weights_restorable = BoolProperty(
         default=False,

@@ -109,6 +109,10 @@ class FaceRegionsBaseProperties():
         }
         return active_regions
 
+    def set_active_regions(self, regions_dict):
+        for region, value in regions_dict.items():
+            setattr(self, region, value)
+
 
 class FaceRegionsBase(FaceRegionsBaseProperties, PropertyGroup):
     pass

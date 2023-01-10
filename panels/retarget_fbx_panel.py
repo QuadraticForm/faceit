@@ -1,20 +1,19 @@
 
 import bpy
-from bpy.props import EnumProperty, IntProperty, StringProperty
 
-from ..core import shape_key_utils as sk_utils
+from .ui import FACEIT_PT_BaseSub
+
 from ..core.retarget_list_base import (DrawTargetShapesListBase,
-                                       RetargetShapesListBase,
                                        TargetShapesListBase)
 from ..core.retarget_list_utils import get_index_of_collection_item
-from .mocap_panel import FACEIT_PT_BaseMocap
 
 
-class FACEIT_PT_RetargetFBX(FACEIT_PT_BaseMocap, bpy.types.Panel):
+class FACEIT_PT_RetargetFBX(FACEIT_PT_BaseSub, bpy.types.Panel):
     bl_label = 'Shape Key Retargeter (FBX)'
     bl_idname = 'FACEIT_PT_RetargetFBX'
+    bl_parent_id = 'FACEIT_PT_MocapUtils'
     # bl_options = set()
-    faceit_predecessor = 'FACEIT_PT_MocapUtils'
+    faceit_predecessor = 'FACEIT_PT_MocapMotionTargets'
 
     @classmethod
     def poll(cls, context):
@@ -24,9 +23,7 @@ class FACEIT_PT_RetargetFBX(FACEIT_PT_BaseMocap, bpy.types.Panel):
         layout = self.layout
         scene = context.scene
 
-        # col = layout.column(align=True)
-        box = layout.box()
-        col = box.column(align=True)
+        col = layout.column(align=True)
 
         retarget_fbx_props = scene.faceit_retarget_fbx_mapping
 

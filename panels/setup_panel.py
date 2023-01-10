@@ -5,11 +5,11 @@ from bpy.props import StringProperty
 from ..core import faceit_utils as futils
 from ..core import vgroup_utils as vg_utils
 from . import draw_utils
-from .ui import FACEIT_PT_Base
+from .ui import FACEIT_PT_Base, FACEIT_PT_BaseSub
 
 
 class FACEIT_PT_BaseSetup(FACEIT_PT_Base):
-    UI_TAB = 'SETUP'
+    UI_TABS = ('SETUP',)
 
 
 class FACEIT_PT_SetupRegister(FACEIT_PT_BaseSetup, bpy.types.Panel):
@@ -71,7 +71,7 @@ class FACEIT_PT_SetupRegister(FACEIT_PT_BaseSetup, bpy.types.Panel):
             op = row.operator('faceit.add_facial_part', icon='ADD')
             row = col.row(align=True)
 
-            if scene.faceit_workspace.workspace != 'MOCAP':
+            if scene.faceit_workspace.workspace != 'MOCAP' and not scene.faceit_use_rigify_armature:
                 row = col.row(align=True)
                 op = row.operator('faceit.face_object_warning_check', text='Check Geometry', icon='CHECKMARK')
                 op.item_name = 'ALL'
@@ -80,24 +80,41 @@ class FACEIT_PT_SetupRegister(FACEIT_PT_BaseSetup, bpy.types.Panel):
                 icon_hide = 'HIDE_OFF' if scene.faceit_show_warnings else 'HIDE_ON'
                 row.prop(scene, 'faceit_show_warnings', icon=icon_hide)
 
-            col_rig = col.column()
+            row = col.row(align=True)
+            row.label(text="Existing Rig")
 
-# START ####################### VERSION 2 ONLY #######################
+            row = col.row(align=True)
+            row.prop(scene, "faceit_body_armature", text="", icon='ARMATURE_DATA')
 
-            col_rig.separator()
 
-            if scene.faceit_version == 2:
-                row = col_rig.row(align=True)
-                row.prop(scene, 'faceit_use_rigify_armature', icon='ARMATURE_DATA')
+class FACEIT_PT_BodyRigSetup(FACEIT_PT_BaseSub, bpy.types.Panel):
+    bl_label = 'Existing Rig Settings'
+    bl_idname = 'FACEIT_PT_BodyRigSetup'
+    faceit_predecessor = 'FACEIT_PT_SetupRegister'
+    bl_parent_id = 'FACEIT_PT_SetupRegister'
+    bl_options = set()
 
-# END ######################### VERSION 2 ONLY #######################
+    @classmethod
+    def poll(cls, context):
+        if super().poll(context):
+            return context.scene.faceit_face_objects and context.scene.faceit_body_armature
 
-            if futils.get_faceit_armature(force_original=True):
-                col_rig.active = False
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+        col = layout.column(align=True)
 
-            elif scene.faceit_use_rigify_armature:
-                row = col_rig.row(align=True)
-                row.prop_search(scene, 'faceit_armature', bpy.data, 'objects', text='')
+        row = col.row(align=True)
+        if scene.faceit_body_armature:
+            row = col.row(align=True)
+            row.prop(scene.faceit_body_armature.data, "pose_position", expand=True)
+            if scene.faceit_workspace.workspace != 'MOCAP':
+                col.separator()
+                if scene.faceit_is_rigify_armature:
+                    row = col.row(align=True)
+                    row.prop(scene, 'faceit_use_rigify_armature', icon='ARMATURE_DATA')
+                if not scene.faceit_use_rigify_armature:
+                    draw_utils.draw_anime_style_eyes(col, scene)
 
 
 class FACEIT_PT_SetupVertexGroups(FACEIT_PT_BaseSetup, bpy.types.Panel):
@@ -111,7 +128,7 @@ class FACEIT_PT_SetupVertexGroups(FACEIT_PT_BaseSetup, bpy.types.Panel):
     def poll(cls, context):
         if super().poll(context):
             if context.scene.faceit_face_objects:
-                return (futils.get_faceit_armature(force_original=True) or not futils.get_faceit_armature()) or not context.scene.faceit_use_rigify_armature
+                return not futils.is_other_rigify_armature()
 
     def draw_assign_group_options(self, row, grp_name, grp_name_ui):
         row.operator('faceit.assign_group', text=grp_name_ui,
@@ -145,26 +162,37 @@ class FACEIT_PT_SetupVertexGroups(FACEIT_PT_BaseSetup, bpy.types.Panel):
         row = col.row(align=True)
         self.draw_assign_group_options(row, 'main', 'Main')
 
-        col.separator(factor=separate_factor)
-        col.label(text='Eyeballs (Mandatory)')
+        if scene.faceit_use_eye_pivots:
+            col.separator(factor=separate_factor)
+            col.label(text='Eyes (Eyeballs, Cornea, Iris, Spots, Highlights)')
 
-        grid = col.grid_flow(columns=2, align=False)
-        row = grid.row(align=True)
-        self.draw_assign_group_options(row, 'left_eyeball', 'Left Eyeball')
+            grid = col.grid_flow(columns=2, align=False)
+            row = grid.row(align=True)
+            self.draw_assign_group_options(row, 'left_eyeball', 'Left Eye')
 
-        row = grid.row(align=True)
-        self.draw_assign_group_options(row, 'right_eyeball', 'Right Eyeball')
+            row = grid.row(align=True)
+            self.draw_assign_group_options(row, 'right_eyeball', 'Right Eye')
+        else:
+            col.separator(factor=separate_factor)
+            col.label(text='Eyeballs')
 
-        # Other Eyes
-        col.separator(factor=separate_factor)
-        col.label(text='Cornea, Iris, Spots, Highlights')
+            grid = col.grid_flow(columns=2, align=False)
+            row = grid.row(align=True)
+            self.draw_assign_group_options(row, 'left_eyeball', 'Left Eyeball')
 
-        grid = col.grid_flow(columns=2, align=False)
-        row = grid.row(align=True)
-        self.draw_assign_group_options(row, 'left_eyes_other', 'Other Left')
+            row = grid.row(align=True)
+            self.draw_assign_group_options(row, 'right_eyeball', 'Right Eyeball')
 
-        row = grid.row(align=True)
-        self.draw_assign_group_options(row, 'right_eyes_other', 'Other Right')
+            # Other Eyes
+            col.separator(factor=separate_factor)
+            col.label(text='Cornea, Iris, Spots, Highlights')
+
+            grid = col.grid_flow(columns=2, align=False)
+            row = grid.row(align=True)
+            self.draw_assign_group_options(row, 'left_eyes_other', 'Other Left')
+
+            row = grid.row(align=True)
+            self.draw_assign_group_options(row, 'right_eyes_other', 'Other Right')
 
         # Eyelashes
         col.separator(factor=separate_factor)
@@ -190,6 +218,13 @@ class FACEIT_PT_SetupVertexGroups(FACEIT_PT_BaseSetup, bpy.types.Panel):
         row = col.row(align=True)
         self.draw_assign_group_options(row, 'tongue', 'Tongue')
 
+        # Tongue
+        col.separator(factor=separate_factor)
+        col.label(text='Eyebrows, Beards, Facial Hair etc.')
+
+        row = col.row(align=True)
+        self.draw_assign_group_options(row, 'facial_hair', 'Facial Hair')
+
         # Rigid
         col.separator(factor=separate_factor)
         col.label(text='Rigid, No Deform')
@@ -206,7 +241,7 @@ class FACE_OBJECTS_UL_list(bpy.types.UIList):
 
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname):
         scene = context.scene
-        face_objects = scene.faceit_face_objects
+        faceit_objects = scene.faceit_face_objects
         if self.layout_type in {'DEFAULT', 'COMPACT'}:
 
             row = layout.row(align=True)
@@ -277,4 +312,4 @@ class FACEIT_OT_DrawAssignedGroupsList(bpy.types.Operator):
                     row.label(text=fgroup)
 
     def execute(self, context):
-        return{'FINISHED'}
+        return {'FINISHED'}

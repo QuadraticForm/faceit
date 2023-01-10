@@ -22,21 +22,22 @@ def get_median_position_from_vert_grp(vgroup_name):
     @vgroup_name [String] = the user defined vertex groups, for facial parts.
     '''
     position = Vector((0, 0, 0))
-
     obj = vg_utils.get_objects_with_vertex_group(vgroup_name)
     if not obj:
         return
+    dg = bpy.context.evaluated_depsgraph_get()
+    obj_eval = obj.evaluated_get(dg)
 
-    vs = vg_utils.get_verts_in_vgroup(obj, vgroup_name)
+    vs = vg_utils.get_verts_in_vgroup(obj_eval, vgroup_name)
 
     # Remve group if it's empty
     if not vs:
-        grp = obj.vertex_groups.get(vgroup_name)
+        grp = obj_eval.vertex_groups.get(vgroup_name)
         if grp:
-            obj.vertex_groups.remove(grp)
+            obj_eval.vertex_groups.remove(grp)
         return None  # position
 
-    mw = obj.matrix_world
+    mw = obj_eval.matrix_world
     # get the global coordinates of group vertices
     global_v_co = [mw @ v.co for v in vs]
 

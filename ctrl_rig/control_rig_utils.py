@@ -1,7 +1,7 @@
 import bpy
 
 from ..core import faceit_utils as futils
-from ..core import shape_key_utils
+from ..core.shape_key_utils import has_shape_keys, get_shape_key_names_from_objects
 from ..core.retarget_list_utils import (get_target_shapes_dict,
                                         set_base_regions_from_dict)
 from . import control_rig_data as ctrl_data
@@ -30,6 +30,24 @@ def get_crig_objects_list(c_rig):
         if obj is not None:
             crig_objects.append(obj)
     return crig_objects
+
+
+def is_control_rig_connected(ctrl_rig):
+    '''Returns true if the control rig is connected to the target objects.'''
+    target_objects = get_crig_objects_list(ctrl_rig)
+    if target_objects:
+        # Search drivers
+        for obj in target_objects:
+            if has_shape_keys(obj):
+                if obj.data.shape_keys.animation_data:
+                    for dr in obj.data.shape_keys.animation_data.drivers:
+                        driver = dr.driver
+                        targets = []
+                        for var in driver.variables:
+                            for t in var.targets:
+                                targets.append(t.id)
+                        if ctrl_rig in targets:
+                            return True
 
 
 def get_slider_bone_name_from_arkit_driver_dict(shape_name):
@@ -69,7 +87,7 @@ def populate_control_rig_target_shapes_from_scene(c_rig, update=False):
 
     # if update:
     # Get custom controllers too...
-    all_shapes = shape_key_utils.get_shape_key_names_from_objects()
+    all_shapes = get_shape_key_names_from_objects()
     for shape_name in all_shapes:
         # If the shape is already added continue
         if shape_name in target_shapes_dict.values():

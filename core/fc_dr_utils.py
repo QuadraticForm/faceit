@@ -308,6 +308,7 @@ def frame_value_pairs_to_numpy_array(frames, values):
 def populate_keyframe_points_from_np_array(fc, data, attr='co', add=False, join_with_existing=True):
 
     result = False
+
     if not fc:
         print('ERROR: Can not find fcurve')
         return False
@@ -352,7 +353,7 @@ def join_np_array_kf_data(kf_data_old, kf_data_new):
 
     kf_data_old = kf_data_old[mask, :]
 
-    final_kf_data = np.append(kf_data_old, kf_data_new, 0)
+    final_kf_data = np.vstack((kf_data_old, kf_data_new))
 
     return final_kf_data
 
@@ -606,7 +607,8 @@ def populate_driver_data(driver_dict, dr_fcurve):
                         try:
                             t.id_type = t_data.get('id_type', t.id_type)
                         except AttributeError:
-                            print('variable target has no id_type.')
+                            pass
+                            # print('variable target has no id_type.')
 
                         if t_data.get('id_is_self') is True:
                             t.id = dr_fcurve.id_data
@@ -616,6 +618,8 @@ def populate_driver_data(driver_dict, dr_fcurve):
                                 t.id = t_data['id']
                             except ReferenceError:
                                 print('The id {} has been removed'.format(t_data['id']))
+                            except TypeError as e:
+                                print(e)
 
                         t.data_path = t_data.get('data_path', t.data_path)
                         t.bone_target = t_data.get('bone_target', t.bone_target)

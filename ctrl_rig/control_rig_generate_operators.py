@@ -80,11 +80,11 @@ class FACEIT_OT_GenerateControlRig(bpy.types.Operator):
             self.report(
                 {'WARNING'},
                 'You need to setup the Faceit Landmarks for your character in order to create the Control Rig.')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         if not retarget_list_utils.eval_target_shapes(scene.faceit_arkit_retarget_shapes):
             self.report({'WARNING'}, 'ARKit Shape list is not initiated.')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         c_rig_filepath = fdata.get_control_rig_file()
         faceit_collection = futils.get_faceit_collection(force_access=True, create=True)
@@ -110,6 +110,7 @@ class FACEIT_OT_GenerateControlRig(bpy.types.Operator):
         obj.name = self.ctrl_rig_name
 
         context.scene.faceit_control_armature = obj
+        obj.animation_data_create()
 
         obj['ctrl_rig_version'] = ctrl_data.CNTRL_RIG_VERSION
 
@@ -122,7 +123,7 @@ class FACEIT_OT_GenerateControlRig(bpy.types.Operator):
 
         ctrl_utils.populate_control_rig_target_objects_from_scene(obj)
         ctrl_utils.populate_control_rig_target_shapes_from_scene(obj)
-        bpy.ops.faceit.setup_control_drivers()
+        bpy.ops.faceit.setup_control_drivers('EXEC_DEFAULT')
 
         return {'FINISHED'}
 
@@ -157,7 +158,7 @@ class FACEIT_OT_MatchControlRig(bpy.types.Operator):
             self.report(
                 {'WARNING'},
                 'You need to setup the Faceit Landmarks for your character in order to fit the Control Rig to your character.')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         landmarks.hide_viewport = False
 
@@ -209,7 +210,6 @@ class FACEIT_OT_MatchControlRig(bpy.types.Operator):
         for bone, pos in bone_translation.items():
 
             bone = edit_bones.get(bone)
-            # print(pos)
             bone.head.x, bone.tail.x = pos
 
         # the dictionary containing

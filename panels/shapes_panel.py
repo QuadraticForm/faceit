@@ -11,11 +11,11 @@ from ..core.retarget_list_base import (DrawRegionsFilterBase,
                                        TargetShapesListBase)
 from ..retargeting.retarget_list_operators import get_active_retarget_list
 
-from.ui import FACEIT_PT_Base
+from .ui import FACEIT_PT_Base
 
 
 class FACEIT_PT_BaseRetargetShapes(FACEIT_PT_Base):
-    UI_TAB = 'SHAPES'
+    UI_TABS = ('SHAPES',)
 
 
 class FACEIT_PT_TargetShapeLists(FACEIT_PT_BaseRetargetShapes, bpy.types.Panel):
@@ -32,7 +32,7 @@ class FACEIT_PT_TargetShapeLists(FACEIT_PT_BaseRetargetShapes, bpy.types.Panel):
 
         scene = context.scene
 
-        col = layout.column()
+        col = layout.column(align=True)
 
         box = col.box()
         row = box.row()
@@ -58,6 +58,8 @@ class FACEIT_PT_TargetShapeLists(FACEIT_PT_BaseRetargetShapes, bpy.types.Panel):
                     else:
                         pin_icon = 'UNPINNED'
                     row.prop(scene, 'faceit_shape_key_lock', icon=pin_icon)
+                row = col.row(align=True)
+                row.operator('faceit.reset_expression_values', icon='LOOP_BACK')
             else:
                 row = col.row(align=True)
                 row.operator_context = 'EXEC_DEFAULT'
@@ -90,6 +92,8 @@ class FACEIT_PT_TargetShapeLists(FACEIT_PT_BaseRetargetShapes, bpy.types.Panel):
                     else:
                         pin_icon = 'UNPINNED'
                     row.prop(scene, 'faceit_shape_key_lock', icon=pin_icon)
+                row = col.row(align=True)
+                row.operator('faceit.reset_expression_values', icon='LOOP_BACK')
             else:
                 row = col.row(align=True)
                 row.operator_context = 'EXEC_DEFAULT'

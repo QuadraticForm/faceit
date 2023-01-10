@@ -813,61 +813,29 @@ control_rig_drivers_dict = {
         'main_dir': 1,
     },
     'noseSneerLeft': {
-        # if NID
-        'expression': '((1 - abs(var)) / 0.5)',
-
+        'expression': '( ( var - 1 ) / 0.5) if var >= 1 else ((- var + 1) / 0.5)',
+        # 'expression': '( ( var - 1 ) / 0.5 * {slider_min} ) if var >= 1 else ((- var + 1) / 0.5 * {slider_max} )',
         'variables': {
             'var': {
                 'bone_name': 'c_nose_sneer.L',
-                'transform_type': 'SCALE_Y',
+                'transform_type': 'SCALE_AVG',
                 'transform_space': 'LOCAL_SPACE',
             },
-
-        # if not NID
-
-        # 'expression': '( ( var - 1 ) / 0.5) if var >= 1 else ((- var + 1) / 0.5)',
-        # 'expression': '( ( var - 1 ) / 0.5 * {slider_min} ) if var >= 1 else ((- var + 1) / 0.5 * {slider_max} )',
-        #'variables': {
-        #    'var': {
-        #        'bone_name': 'c_nose_sneer.L',
-        #        'transform_type': 'SCALE_AVG',
-        #        'transform_space': 'LOCAL_SPACE',
-        #    },
-
-        # end NID
-
-        
         },
         'overwrite_expression': False,
         'range': 'all',
         'main_dir': -1,
     },
     'noseSneerRight': {
-
-        # if NID
-
-        'expression': '((1 - abs(var)) / 0.5)',
-
+        # 'expression': 'var / 1.5',
+        'expression': '( ( var - 1 ) / 0.5) if abs(var) >= 1 else (((- var + 1) / 0.5))',
+        # 'expression': '( ( var - 1 ) / 0.5 * {slider_min} ) if abs(var) >= 1 else (((- var + 1) / 0.5) * {slider_max} )',
         'variables': {
             'var': {
                 'bone_name': 'c_nose_sneer.R',
-                'transform_type': 'SCALE_Y',
+                'transform_type': 'SCALE_AVG',
                 'transform_space': 'LOCAL_SPACE',
             },
-
-        # if not NID
-
-        # 'expression': 'var / 1.5',
-        #'expression': '( ( var - 1 ) / 0.5) if abs(var) >= 1 else (((- var + 1) / 0.5))',
-        # 'expression': '( ( var - 1 ) / 0.5 * {slider_min} ) if abs(var) >= 1 else (((- var + 1) / 0.5) * {slider_max} )',
-        #'variables': {
-        #    'var': {
-        #        'bone_name': 'c_nose_sneer.R',
-        #        'transform_type': 'SCALE_AVG',
-        #        'transform_space': 'LOCAL_SPACE',
-        #    },
-
-        # end NID
         },
         'overwrite_expression': False,
         'range': 'all',

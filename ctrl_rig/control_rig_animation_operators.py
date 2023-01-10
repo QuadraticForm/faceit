@@ -5,8 +5,9 @@ import bpy
 import numpy as np
 from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
 
+from ..panels.draw_utils import draw_text_block
+
 from ..core import faceit_utils as futils
-from ..core.shape_key_utils import get_enum_shape_key_actions
 from ..core import fc_dr_utils, retarget_list_utils, shape_key_utils
 from . import control_rig_data as ctrl_data
 from . import control_rig_utils
@@ -30,81 +31,49 @@ class FACEIT_OT_BakeShapeKeysToControlRig(bpy.types.Operator):
     bl_label = 'Bake Shape Key Action to Control Rig'
     bl_options = {'REGISTER', 'UNDO', 'INTERNAL'}
 
-    action_source: EnumProperty(
-        name='Action',
-        items=get_enum_shape_key_actions,
-        update=update_enum,
-    )
-
-    action_target: EnumProperty(
-        name='Action',
-        items=(
-            ('NEW', 'Create New Action', 'Create a new action on the control rig'),
-            ('ACTIVE', 'Active Action', 'Use the current action from the control rig'),
-        ),
-        default='NEW'
-    )
-    new_action_name: bpy.props.StringProperty(
-        name='Action',
-        default='controls_action',
-        update=update_new_action_name,
-    )
-    new_action_exists: bpy.props.BoolProperty(
-        name='Action Exists',
-        default=False,
-    )
-    active_action_name: bpy.props.StringProperty(
-        name='Action',
-        default=''
-    )
-
-    c_rig_has_action: bpy.props.BoolProperty(
-        name='Action Found',
-        default=False,
-    )
-
-    overwrite_action: EnumProperty(
-        name='Overwrite Action',
-        items=(
-            ('OVERWRITE', 'Overwrite', 'Overwrite the entire Action. All existing keyframes will be removed.'),
-            ('APPEND', 'Append', 'Append the new keyframes. All existing keyframes will be preserved.'),
-        ),
-    )
-
     resample_fcurves: bpy.props.BoolProperty(
         name='Resample Keyframes',
         default=False,
         description='Resampling the keyframes will result in better results for some sparse fcurves. The framerate of the animation will change to the scene framerate'
     )
-
+    new_action_name: StringProperty(
+        name='New Action Name',
+        default="",
+        options={'SKIP_SAVE', }
+    )
     compensate_amplify_values: bpy.props.BoolProperty(
         name='Compensate Amplify Values',
         default=False,
         description='If this is enabled the amplify values will be inverted during bake, resulting in a one to one bake, even though amplify values are set to non-default values.'
     )
-
     ignore_use_animation: BoolProperty(
         name='Ignore Mute Property',
         description='Bake all Animation, regardless of the use_animation property in the arkit expressions list',
         default=False,
     )
-
-    remove_sk_action: BoolProperty(
-        name='Remove Shape Key Action',
-        default=False,
-        description='Remove the shape key action. Only used when directly imported to the control rig.',
-        options={'SKIP_SAVE', }
-    )
-
     show_advanced_settings: BoolProperty(
         name='Show Advanced Settings',
         default=False,
         description='Blend in the advanced settings for this operator'
     )
-
+    use_mocap_action: BoolProperty(
+        name="Use Mocap Action",
+        description="use the mocap action if True; Else: use the set bake action",
+        default=True
+    )
     frame_start: IntProperty(
         name='Start Frame',
+        description='Start frame for the new keyframes. If append method is selected, the specified frame will present an offset to existing keyframes in the given action.',
         default=0,
+        soft_min=0,
+        soft_max=50000,
+    )
+    overwrite_method: EnumProperty(
+        name='Overwrite Method',
+        items=(
+            ('REPLACE', 'Replace', 'Replace the entire Action. All existing keyframes will be removed.'),
+            ('MIX', 'Mix', 'Mix with existing keyframes, replacing only the new range.'),
+        ),
         options={'SKIP_SAVE', }
     )
 
@@ -116,92 +85,45 @@ class FACEIT_OT_BakeShapeKeysToControlRig(bpy.types.Operator):
                 return c_rig.faceit_crig_objects
 
     def invoke(self, context, event):
-
-        if self.remove_sk_action:
-            sk_action = None
-            pass
-        else:
-            # Check if the main object has a Shape Key Action applied
-            # main_obj = futils.get_main_faceit_object()
-            c_rig = futils.get_faceit_control_armature()
-            sk_action = None
-            c_rig_objects = c_rig.faceit_crig_objects
-            if c_rig_objects:
-                main_obj = futils.get_object(c_rig_objects[0].name)
-                if shape_key_utils.has_shape_keys(main_obj):
-                    if main_obj.data.shape_keys.animation_data:
-                        sk_action = main_obj.data.shape_keys.animation_data.action
-
-        if sk_action:
-            self.action_source = sk_action.name
-            self.new_action_name = sk_action.name + CRIG_ACTION_SUFFIX
-
-        # Get current Control Rig action
-        rig = futils.get_faceit_control_armature()
-        if rig.animation_data:
-            a = rig.animation_data.action
-            if a:
-                self.active_action_name = a.name
-                self.c_rig_has_action = True
-
+        if self.use_mocap_action:
+            context.scene.faceit_bake_sk_to_crig_action = context.scene.faceit_mocap_action
+        c_rig = futils.get_faceit_control_armature()
+        if not c_rig.animation_data:
+            c_rig.animation_data_create()
         wm = context.window_manager
         return wm.invoke_props_dialog(self)
 
-    def cancel(self, context):
-        # The operator got executed from mocap import, undo the import!
-        if self.remove_sk_action:
-            bpy.ops.ed.undo()
-
     def draw(self, context):
+        c_rig = futils.get_faceit_control_armature()
         layout = self.layout
-        row = layout.row(align=True)
-        row.label(text='Source Action (Shape Keys)')
+        col = layout.column(align=True)
+        col.use_property_split = True
+        col.use_property_decorate = False
 
-        if not self.action_source:
-            row = layout.row(align=True)
-            row.label(text='No suitable Shape Key Action found. Load Mocap first!')
-        else:
-            row = layout.row(align=True)
-            row.prop(self, 'action_source', text='', icon='ACTION')
-            row = layout.row(align=True)
-            row.label(text='Target Action (Pose Bones)')
-
-            row = layout.row(align=True)
-            row.prop(self, 'action_target', icon='ACTION_TWEAK', expand=True)
-
-            row = layout.row(align=True)
-            if self.action_target == 'NEW':
-                row.label(text='New Name:')
-                row = layout.row(align=True)
-                row.prop(self, 'new_action_name', text='', icon='ACTION')
-                if self.new_action_exists:
-                    row = layout.row(align=True)
-                    row.label(text='WARNING! The Action exists already.')
-                    row = layout.row(align=True)
-                    row.prop(self, 'overwrite_action', expand=True)
-
-            elif self.action_target == 'ACTIVE':
-                if self.active_action_name:
-                    row.prop(self, 'active_action_name', text='', emboss=False, icon='ACTION')
-                    row = layout.row(align=True)
-                    row.prop(self, 'overwrite_action', expand=True)
-                else:
-                    row.label(text='No Active Action on Control Rig')
-        if self.overwrite_action == 'OVERWRITE':
-            frame_start_txt = 'Frame Start'
-        else:
-            frame_start_txt = 'Frame Offset'
-
-        row = layout.row()
-        row.prop(self, 'frame_start', text=frame_start_txt, icon='CON_TRANSFORM')
-        row = layout.row(align=True)
+        row = col.row(align=True)
+        row.prop(context.scene, "faceit_bake_sk_to_crig_action", icon='ACTION')
+        row = col.row(align=True)
+        source_action = context.scene.faceit_bake_sk_to_crig_action
+        if source_action:
+            self.new_action_name = source_action.name + CRIG_ACTION_SUFFIX
+        row.prop_search(c_rig.animation_data,
+                        'action', bpy.data, 'actions', text="Ctrl Rig Action")
+        op = row.operator('faceit.new_ctrl_rig_action', icon='ADD', text="")
+        op.action_name = self.new_action_name
+        col.separator()
+        row = col.row()
+        row.prop(self, 'overwrite_method', expand=True)
+        row = col.row()
+        row.prop(self, 'frame_start', icon='CON_TRANSFORM')
+        col.use_property_split = False
+        row = col.row(align=True)
         row.prop(self, 'show_advanced_settings', icon='COLLAPSEMENU')
         if self.show_advanced_settings:
-            row = layout.row(align=True)
+            row = col.row(align=True)
             row.label(text='Options')
-            row = layout.row(align=True)
+            row = col.row(align=True)
             row.prop(self, 'resample_fcurves')
-            row = layout.row(align=True)
+            row = col.row(align=True)
             row.prop(self, 'compensate_amplify_values')
 
     def execute(self, context):
@@ -221,55 +143,33 @@ class FACEIT_OT_BakeShapeKeysToControlRig(bpy.types.Operator):
             return{'CANCELLED'}
 
         # The shape key action
-        sk_action = None
-
-        if self.action_source:
-            sk_action = bpy.data.actions.get(self.action_source)
+        sk_action = scene.faceit_bake_sk_to_crig_action
 
         if not sk_action:
             self.report({'ERROR'}, 'Couldn\'t find a suitable action.')
             return{'CANCELLED'}
-
         if not any(['key_block' in fc.data_path for fc in sk_action.fcurves]):
             self.report(
                 {'WARNING'},
                 'You can only retarget Shape Key Actions to the control rig. The result may not be expected')
-
         if not sk_action.fcurves:
             self.report({'ERROR'}, 'There is no animation data in the source Action. Cancelled')
             return{'CANCELLED'}
 
         if self.resample_fcurves:
-
             sk_action = sk_action.copy()
 
-        c_rig_action = None
+        # Get ctrl rig action
+        c_rig_action = c_rig.animation_data.action
 
-        # Create a new action on the crig object or get active action
-        if self.action_target == 'NEW':
-            c_rig_action = bpy.data.actions.get(self.new_action_name)
-
-            if not c_rig_action:
-                c_rig_action = bpy.data.actions.new(self.new_action_name)
-        else:
-            c_rig_action = bpy.data.actions.get(self.active_action_name)
-            if not c_rig_action:
-                self.report({'ERROR'}, 'No Active Action on Control Rig.')
-                return{'CANCELLED'}
-
-        if self.overwrite_action == 'OVERWRITE':
-            action_name = c_rig_action.name
-            bpy.data.actions.remove(c_rig_action)
-            c_rig_action = bpy.data.actions.new(action_name)
-        else:
-            # Add offset to framestart
-            kf_end = int(futils.get_action_frame_range(c_rig_action)[1])
-            self.frame_start = self.frame_start + kf_end
-
-        if not c_rig.animation_data:
-            c_rig.animation_data_create()
-
-        c_rig.animation_data.action = c_rig_action
+        if c_rig_action and self.overwrite_method == 'REPLACE':
+            self.new_action_name = c_rig_action.name
+            bpy.data.actions.remove(c_rig_action, do_unlink=True)
+            c_rig_action = None
+        if not c_rig_action:
+            c_rig_action = bpy.data.actions.new(self.new_action_name)
+            self.report({'INFO'}, f"Created new Action with name {self.new_action_name}")
+            c_rig.animation_data.action = c_rig_action
 
         def resample_fcurves(fc, start, end):
             fc.convert_to_samples(start, end)
@@ -305,14 +205,6 @@ class FACEIT_OT_BakeShapeKeysToControlRig(bpy.types.Operator):
                         }
                 else:
                     missing_animation.append(target_shape.name)
-
-        # if missing_animation:
-        #     for shape in missing_animation:
-        #         self.report(
-        #             {'WARNING'},
-        #             'Could not find Animation Data for ARKit Expression {} in Action {}.'.format(shape, sk_action.name))
-
-        # c_rig_action = c_rig.animation_data.action
 
         def scale_to_new_range(
                 kf_data, min_range, max_range, sk_max, sk_min, range, main_dir=1, is_scale=False,
@@ -434,12 +326,10 @@ class FACEIT_OT_BakeShapeKeysToControlRig(bpy.types.Operator):
             fc = fc_dr_utils.get_fcurve_from_bpy_struct(c_rig_action.fcurves, dp=dp, array_index=array_index)
             fc_dr_utils.populate_keyframe_points_from_np_array(fc, data_copy, add=True)
 
-        # Remove duplicated action (sampled)
-        if self.resample_fcurves or self.remove_sk_action:
-            bpy.data.actions.remove(sk_action)
-
         scene.frame_start, scene.frame_end = (int(x) for x in futils.get_action_frame_range(c_rig_action))
 
+        if not self.use_mocap_action:
+            bpy.data.actions.remove(sk_action, do_unlink=True, do_ui_user=True)
         return{'FINISHED'}
 
 
@@ -617,12 +507,13 @@ class FACEIT_OT_BakeControlRigToShapeKeys(bpy.types.Operator):
         default=''
     )
 
-    overwrite_action: EnumProperty(
-        name='Overwrite Action',
+    overwrite_method: EnumProperty(
+        name='Overwrite Method',
         items=(
-            ('OVERWRITE', 'Overwrite', 'Overwrite the entire Action. All existing keyframes will be removed.'),
-            ('APPEND', 'Append', 'Append the new keyframes. All existing keyframes will be preserved.'),
+            ('REPLACE', 'Replace', 'Replace the entire Action. All existing keyframes will be removed.'),
+            ('MIX', 'Mix', 'Mix with existing keyframes, replacing only the new range.'),
         ),
+        options={'SKIP_SAVE', }
     )
 
     resample_fcurves: BoolProperty(
@@ -684,111 +575,93 @@ class FACEIT_OT_BakeControlRigToShapeKeys(bpy.types.Operator):
 
         # Get current Control Rig action
         rig = futils.get_faceit_control_armature()
-        if rig.animation_data:
-            a = rig.animation_data.action
-            if a:
-                self.action_source = a.name
-
-        # Check if the main object has a Shape Key Action applied
-        main_obj = futils.get_main_faceit_object()
-        sk_action = None
-        if shape_key_utils.has_shape_keys(main_obj):
-            if main_obj.data.shape_keys.animation_data:
-                sk_action = main_obj.data.shape_keys.animation_data.action
-
-        if not sk_action:
-            sk_action = context.scene.faceit_mocap_action
-        if sk_action:
-            self.active_action_name = sk_action.name
+        if not rig.animation_data:
+            rig.animation_data_create()
 
         wm = context.window_manager
         return wm.invoke_props_dialog(self)
 
     def draw(self, context):
         layout = self.layout
-        row = layout.row()
+        col = layout.column(align=True)
+        c_rig = futils.get_faceit_control_armature()
+        col.use_property_split = True
+        col.use_property_decorate = False
+
+        row = col.row()
         row.prop(self, 'bake_method', expand=True)
-        row = layout.row()
+        # row = col.row()
 
         if self.bake_method == 'SLOW':
-            row = layout.row()
-            row.label(text='This Operation can take several Minutes. Continue?')
-
-        row = layout.row(align=True)
-        row.label(text='Source Action (Pose Bones)')
-
-        # if self.action_source == '-':
-        if not self.action_source:
-            row = layout.row(align=True)
-            row.label(text='No suitable Shape Key Action found. Load Mocap first!')
+            # row = col.row()
+            draw_text_block(
+                col,
+                text="Evaluates the values directly from the drivers. Works for animation layers, but might take several minutes.",
+                draw_in_op=True
+            )
         else:
-            row = layout.row(align=True)
-            row.prop(self, 'action_source', text='', icon='ACTION')
-            row = layout.row(align=True)
-            row.label(text='Target Action (Shape Keys)')
+            # row = col.row()
+            draw_text_block(
+                col,
+                text="Maps the bone animation into the shape key ranges. Does not work with multiple animation layers.",
+                draw_in_op=True
+            )
 
-            row = layout.row(align=True)
-            row.prop(self, 'action_target', icon='ACTION_TWEAK', expand=True)
-
-            row = layout.row(align=True)
-            if self.action_target == 'NEW':
-                row.label(text='New Name:')
-                row = layout.row(align=True)
-                row.prop(self, 'new_action_name', text='', icon='ACTION')
-                if self.new_action_exists:
-                    row = layout.row(align=True)
-                    row.label(text='WARNING! The Action exists already.')
-                    if self.bake_method == 'SLOW':
-                        row = layout.row(align=True)
-                        row.label(text='Animation Data will be overwritten!')
-                    else:
-                        row = layout.row(align=True)
-                        row.prop(self, 'overwrite_action', expand=True)
-
-            elif self.action_target == 'ACTIVE':
-                if self.active_action_name:
-                    row.prop(self, 'active_action_name', text='', emboss=False, icon='ACTION')
-                    if self.bake_method == 'SLOW':
-                        row = layout.row(align=True)
-                        row.label(text='Animation Data will be overwritten!')
-                    else:
-                        row = layout.row(align=True)
-                        row.prop(self, 'overwrite_action', expand=True)
-                else:
-                    row.label(text='No Active Action on Control Rig')
+        row = col.row(align=True)
+        row.label(text='Source Action (Ctrl Rig)')
+        row = col.row(align=True)
+        row.prop_search(c_rig.animation_data,
+                        'action', bpy.data, 'actions', text="Ctrl Rig Action")
+        # row.prop(context.scene, "faceit_bake_crig_to_sk_action", icon='ACTION')
+        row = col.row(align=True)
+        source_action = context.scene.faceit_bake_crig_to_sk_action
+        if source_action:
+            if source_action.name.endswith(CRIG_ACTION_SUFFIX):
+                self.new_action_name = source_action.name.strip(CRIG_ACTION_SUFFIX)
+            else:
+                self.new_action_name = source_action.name + "_retarget"
+        row = col.row(align=True)
+        row.prop(context.scene, "faceit_mocap_action", icon='ACTION')
+        op = row.operator('faceit.new_action', icon='ADD', text="")
+        op.action_name = self.new_action_name
+        col.separator()
+        row = col.row()
+        if self.bake_method == 'SLOW':
+            draw_text_block(col,
+                            text="Animation Data will be overwritten in SLOW mode!",
+                            draw_in_op=True,
+                            )
+            # row.label(text='Animation Data will be overwritten!')
+        else:
+            row.prop(self, 'overwrite_method', expand=True)
+        row = col.row()
+        row.prop(self, 'frame_start', icon='CON_TRANSFORM')
+        col.use_property_split = False
 
         if self.bake_method != 'SLOW':
 
-            if self.overwrite_action == 'OVERWRITE':
-                frame_start_txt = 'Frame Start'
-            else:
-                frame_start_txt = 'Frame Offset'
-
-            row = layout.row()
-            row.prop(self, 'frame_start', text=frame_start_txt, icon='CON_TRANSFORM')
-
-            row = layout.row(align=True)
+            row = col.row(align=True)
             row.prop(self, 'show_advanced_settings', icon='COLLAPSEMENU')
             if self.show_advanced_settings:
-                row = layout.row(align=True)
+                row = col.row(align=True)
                 row.label(text='Options')
-                row = layout.row(align=True)
+                row = col.row(align=True)
                 row.prop(self, 'resample_fcurves')
-                row = layout.row(align=True)
+                row = col.row(align=True)
                 row.prop(self, 'compensate_amplify_values')
                 # row = layout.row(align=True)
                 # row.prop(self, 'ignore_use_animation')
-                row = layout.row(align=True)
+                row = col.row(align=True)
                 row.label(text='(EXPERIMENTAL)')
-                row = layout.row(align=True)
+                row = col.row(align=True)
                 row.prop(self, 'copy_fcurve_properties')
                 if self.copy_fcurve_properties:
-                    row = layout.row(align=True)
+                    row = col.row(align=True)
                     row.prop(self, 'copy_fcurve_handles')
                     row.prop(self, 'copy_fcurve_modifiers')
-                row = layout.row()
+                row = col.row()
                 row.label(text='After Baking:')
-                row = layout.row()
+                row = col.row()
                 # row.prop(self, 'remove_c_rig', icon='TRASH')
                 row.prop(self, 'c_rig_operation', expand=True, icon='TRASH')
 
@@ -856,47 +729,28 @@ class FACEIT_OT_BakeControlRigToShapeKeys(bpy.types.Operator):
             return{'CANCELLED'}
 
         # The rig action
-        rig_action = None
-
-        if self.action_source:
-            rig_action = bpy.data.actions.get(self.action_source)
-
+        rig_action = c_rig.animation_data.action
         if not rig_action:
-            self.report({'ERROR'}, 'Couldn\'t find a suitable action.')
+            self.report({'ERROR'}, 'You need to choose a valid source action.')
             return{'CANCELLED'}
 
         if not rig_action.fcurves:
-            self.report({'ERROR'}, 'There is no animation data in the active Action. Cancelled')
+            self.report({'ERROR'}, f'There is no animation data in the source Action {rig_action.name}.')
             return{'CANCELLED'}
 
         if self.resample_fcurves:
-
             rig_action = rig_action.copy()
 
-        sk_action = None
-
-        # Create a new action on the crig object or get active action
-        if self.action_target == 'NEW':
-            sk_action = bpy.data.actions.get(self.new_action_name)
-            # if c_rig_action:
-            #     self.report({'WARNING'}, ' The new Action exists already. Overwriting.')
-            if not sk_action:
-                sk_action = bpy.data.actions.new(self.new_action_name)
-        else:
-            sk_action = bpy.data.actions.get(self.active_action_name)
-            if not sk_action:
-                self.report({'ERROR'}, 'No Active Shape Key Action found.')
-                # self.report({'ERROR'}, 'The Target Actions name doesn\'t match the active action on Control rig.')
-                return{'CANCELLED'}
-
-        if self.overwrite_action == 'OVERWRITE' or self.bake_method == 'SLOW':
+        sk_action = scene.faceit_mocap_action
+        if sk_action:
             action_name = sk_action.name
-            bpy.data.actions.remove(sk_action)
-            sk_action = bpy.data.actions.new(action_name)
-        if self.overwrite_action == 'APPEND':
-            # Add offset to framestart
-            kf_end = int(futils.get_action_frame_range(sk_action)[1])
-            self.frame_start = self.frame_start + kf_end
+            if self.overwrite_method == 'REPLACE':
+                # Remove the target action and recreate
+                bpy.data.actions.remove(sk_action, do_unlink=True)
+                sk_action = bpy.data.actions.new(action_name)
+        else:
+            bpy.ops.faceit.new_action('EXEC_DEFAULT', action_name=self.new_action_name)
+            sk_action = scene.faceit_mocap_action
 
         def resample_fcurves(fc, start, end):
             fc.convert_to_samples(start, end)
@@ -1051,5 +905,6 @@ class FACEIT_OT_BakeControlRigToShapeKeys(bpy.types.Operator):
             bpy.data.actions.remove(rig_action)
 
         scene.frame_start, scene.frame_end = (int(x) for x in futils.get_action_frame_range(sk_action))
+        scene.faceit_mocap_action = sk_action
 
         return{'FINISHED'}

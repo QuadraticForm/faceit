@@ -1,9 +1,14 @@
-from operator import attrgetter
 
 import bpy
-from bpy.props import BoolProperty, FloatProperty, IntProperty
+from bpy.props import BoolProperty, StringProperty
 from bpy_extras import view3d_utils
 from mathutils import Vector
+
+from .landmarks_utils import check_if_area_is_active, set_front_view, check_is_quad_view, unlock_3d_view
+
+from ..core.mesh_utils import get_max_dim_in_direction
+
+from ..panels.draw_utils import draw_text_block
 
 from ..core import faceit_data as fdata
 from ..core import faceit_utils as futils
@@ -14,45 +19,49 @@ from . import landmarks_data as lm_data
 
 
 class FACEIT_OT_FacialLandmarks(bpy.types.Operator):
-    '''
-imports the facial landmark reference and starts the interactive fitting process
-1 - set the facial position to chin
-2/3 - set width/height of landmark mesh
-3 - refine positions by editting the landmarks mesh
-    '''
-
+    '''Place the facial landmarks. 1. Match Chin Position, 2. Match Eye Height, 3. Match Jaw Width'''
     bl_idname = 'faceit.facial_landmarks'
     bl_label = 'facial_landmarks'
     bl_options = {'UNDO', 'INTERNAL'}
 
-    # @state : the state of landmark fitting
-    state: bpy.props.IntProperty(default=0)
+    mouse_x: bpy.props.IntProperty()
+    mouse_y: bpy.props.IntProperty()
+
+    # initial cursor position to scale with mouse movement
+    initial_mouse_scale = 0
+    # to check if the scale has been initialized
+    set_init_scale = False
+    # the initial dimensions used abort scaling operation
+    initial_dimensions = (0, 0, 0)
+
+    area_width = 0
+    area_height = 0
+    area_x = 0
+    area_y = 0
 
     @classmethod
     def poll(cls, context):
         if context.mode == 'OBJECT':
-            return futils.get_main_faceit_object()
+            return context.scene.faceit_face_objects
 
-    def __init__(self):
-        # for right/left click query
-        self.mouse_select = None
-        self.mouse_deselect = None
-        # safety counter needed as a workaround for multitrigger events
-        self.safety_timer = 3
-        # initial cursor position to scale with mouse movement
-        self.initial_mouse_scale = 0
-        # to check if the scale has been initialized
-        self.set_init_scale = False
-        # the initial dimensions used abort scaling operation
-        self.initial_dimensions = (0, 0, 0)
-
-    def cancel(self, context):
-        print('cancel')
-        context.preferences.themes[0].view_3d.vertex_size = context.scene.faceit_vertex_size
+    def invoke(self, context, event):
+        self.mouse_x = event.mouse_x
+        self.mouse_y = event.mouse_y
+        area = context.area
+        self.area_width = area.width
+        self.area_height = area.height
+        self.area_x = area.x
+        self.area_y = area.y
+        self.execute(context)
+        context.scene.tool_settings.use_snap = False
+        self.set_face_pos(context, event)
+        context.window_manager.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
 
     def execute(self, context):
 
         scene = context.scene
+        bpy.ops.faceit.unlock_3d_view()
 
         if context.object:
             if not futils.get_hide_obj(context.object):  # context.object.hide_viewport == False:
@@ -63,28 +72,28 @@ imports the facial landmark reference and starts the interactive fitting process
 
         futils.clear_object_selection()
         main_obj = futils.get_main_faceit_object()
+        if main_obj is None:
+            self.report({'ERROR'}, 'Please assign the Main Vertex Group to the Face Mesh! (Setup Tab)')
+            return {'CANCELLED'}
         futils.set_active_object(main_obj.name)
-        # frame the object to be rigged
-        for area in bpy.context.screen.areas:
-            if area.type == 'VIEW_3D':
-                override = context.copy()
-                override['area'] = area
-                bpy.ops.view3d.view_selected(use_all_regions=False)
-                bpy.ops.view3d.view_axis(override, type='FRONT')
-                shading = area.spaces.active.shading
-                shading.type = 'SOLID'
+        area = context.area
+        for space in area.spaces:
+            if space.type == 'VIEW_3D':
+                if space.local_view:
+                    bpy.ops.view3d.localview()
+                shading = space.shading
+                # shading.type = 'SOLID'
                 shading.show_xray = False
                 shading.show_xray_wireframe = False
-                break
-
+        if check_is_quad_view(area):
+            bpy.ops.screen.region_quadview()
+        bpy.ops.view3d.view_selected(use_all_regions=False)
+        bpy.ops.view3d.view_axis(type='FRONT')
         # load the landmarks object
         filepath = fdata.get_landmarks_file()
-
-        # load the objects data in the file
         with bpy.data.libraries.load(filepath) as (data_from, data_to):
             data_to.objects = data_from.objects
-
-        # add the objects in the scene
+        # add the objects to the scene
         for obj in data_to.objects:
             if obj.type == 'MESH':
                 if scene.faceit_asymmetric:
@@ -100,38 +109,34 @@ imports the facial landmark reference and starts the interactive fitting process
                     else:
                         bpy.data.objects.remove(obj)
         lm_obj.name = 'facial_landmarks'
-
+        if main_obj:
+            lm_obj.location.y = get_max_dim_in_direction(
+                obj=main_obj, direction=Vector((0, -1, 0)), vertex_group_name="faceit_main")[1] - lm_obj.dimensions[1]
         futils.clear_object_selection()
         futils.set_active_object(lm_obj.name)
-
         # initialize the state prop
         if lm_obj:
-            if not hasattr(lm_obj, '["state"]'):
-                lm_obj['state'] = self.state
-
-        self.reset_scale(context)
+            lm_obj["state"] = 0
+        # Set scale to main obj height. Main obj can be a body mesh at this point.
+        lm_obj.dimensions[2] = main_obj.dimensions[2] / 2
+        lm_obj.scale = [lm_obj.scale[2], ] * 3
+        self.report({'INFO'}, "Align the Landmarks with your characters chin!")
 
         return {'FINISHED'}
 
-    def reset_scale(self, context):
-        obj = futils.get_object('facial_landmarks')
-        face_obj = futils.get_main_faceit_object()
-
-        if hasattr(obj, '["state"]'):
-            if obj['state'] == 0:
-                obj.dimensions[2] = face_obj.dimensions[2] / 2
-                obj.scale = [obj.scale[2], obj.scale[2], obj.scale[2]]
-            else:
-                mw = face_obj.matrix_world
-                # get the global coordinates
-                global_v_co = [mw @ v.co for v in face_obj.data.vertices]
-                # get the highest point in head mesh (temple)
-                v_highest = max([co.z for co in global_v_co])
-                # get distance from chin to temple
-                head_height = obj.location[2] - v_highest
-                # apply scale
-                obj.dimensions[2] = head_height
-                obj.scale = [obj.scale[2], obj.scale[2], obj.scale[2]]
+    def set_scale_to_head_height(self, lm_obj):
+        '''Set scale after applying the chin position.'''
+        main_obj = futils.get_main_faceit_object()
+        mw = main_obj.matrix_world
+        # get the global coordinates
+        global_v_co = [mw @ v.co for v in main_obj.data.vertices]
+        # get the highest point in head mesh (temple)
+        v_highest = max([co.z for co in global_v_co])
+        # get distance from chin to temple
+        head_height = lm_obj.location[2] - v_highest
+        # apply scale
+        lm_obj.dimensions[2] = head_height
+        lm_obj.scale = [lm_obj.scale[2], ] * 3
 
     def set_face_pos(self, context, event):
         obj = futils.get_object('facial_landmarks')
@@ -140,9 +145,8 @@ imports the facial landmark reference and starts the interactive fitting process
         _region = context.region
         _region_3d = context.space_data.region_3d
         coord = 0, event.mouse_region_y
-        obj.location = view3d_utils.region_2d_to_location_3d(_region, _region_3d, coord, obj.location)
-        obj.location[0] = 0
-        obj.location[1] = 0
+        new_location = view3d_utils.region_2d_to_location_3d(_region, _region_3d, coord, obj.location)
+        obj.location.z = new_location.z
 
     def set_face_scale(self, context, event, axis=2):
 
@@ -173,104 +177,186 @@ imports the facial landmark reference and starts the interactive fitting process
 
     # modal operations depending on current state
     def modal(self, context, event):
-        obj = futils.get_object('facial_landmarks')
-        if not obj:
+
+        mouse_x = event.mouse_x
+        mouse_y = event.mouse_y
+
+        lm_obj = futils.get_object('facial_landmarks')
+        if not lm_obj:
             self.report({'WARNING'}, 'No landmarks object, could not finish')
             return {'CANCELLED'}
 
-        # safety counter needed as a workaround for multitrigger events
-        if self.safety_timer >= 0:
-            self.safety_timer = self.safety_timer - 1
+        current_state = lm_obj["state"]
 
-        if event.type in {'WHEELUPMOUSE', 'WHEELDOWNMOUSE'}:  # 'MIDDLEMOUSE'
+        if event.type in {'WHEELUPMOUSE', 'WHEELDOWNMOUSE'}:
             # allow navigation
             return {'PASS_THROUGH'}
 
         # modal operations: move, scale height, scale width
         if event.type == 'MOUSEMOVE':
-            if obj['state'] == 0:
+            if mouse_x <= self.area_x:
+                context.window.cursor_warp(self.area_x + self.area_width, mouse_y)
+            if mouse_x >= self.area_x + self.area_width:
+                context.window.cursor_warp(self.area_x, mouse_y)
+            if mouse_y <= self.area_y:
+                context.window.cursor_warp(mouse_x, self.area_y + self.area_height)
+            if mouse_y >= self.area_y + self.area_height:
+                context.window.cursor_warp(mouse_x, self.area_y)
+            if lm_obj["state"] == 0:
                 self.set_face_pos(context, event)
-            elif obj['state'] == 1:
+            elif lm_obj["state"] == 1:
                 self.set_face_scale(context, event, axis=2)
-            elif obj['state'] == 2:
+            elif lm_obj["state"] == 2:
                 self.set_face_scale(context, event, axis=0)
 
         # go into next state / finish
-        elif event.type == self.mouse_select and event.value == 'RELEASE':
-
-            if obj['state'] == 0:
-                obj['state'] = 1
+        elif event.type == 'LEFTMOUSE' and event.value == 'RELEASE':
+            if current_state == 0:
+                self.report({'INFO'}, "Match the face height")
+                lm_obj["state"] = 1
                 self.set_init_scale = False
                 # scale to the right dimensions:
-                self.reset_scale(context)
-                futils.set_active_object(obj.name)
-                # frame the object to be rigged
-                for area in bpy.context.screen.areas:
-                    if area.type == 'VIEW_3D':
-                        override = context.copy()
-                        override['area'] = area
-                        bpy.ops.view3d.view_selected(use_all_regions=False)
-                        bpy.ops.view3d.view_axis(override, type='FRONT')
-                        break
-                self.safety_timer = 3
+                self.set_scale_to_head_height(lm_obj=lm_obj)
+                bpy.ops.view3d.view_selected(use_all_regions=False)
+                return {'RUNNING_MODAL'}
 
-            if obj['state'] == 1 and self.safety_timer <= 0:
+            if current_state == 1:
+                self.report({'INFO'}, "Match the face width!")
                 self.set_init_scale = False
-                obj['state'] = 2
-                self.safety_timer = 3
+                lm_obj["state"] = 2
+                return {'RUNNING_MODAL'}
 
-            if obj['state'] == 2 and self.safety_timer <= 0:
-                final_mat = obj.matrix_world
-                obj.matrix_world = final_mat
-                futils.set_active_object(obj.name)
-                obj['state'] = 3
+            if current_state == 2:
+                self.report({'INFO'}, "Fine-tune the landmarks in Edit mode until they match the face.")
+                final_mat = lm_obj.matrix_world
+                lm_obj.matrix_world = final_mat
+                futils.set_active_object(lm_obj.name)
+                lm_obj["state"] = 3
 
                 # Make big vertices
-                context.preferences.themes[0].view_3d.vertex_size = 8
-                # enable vertex selection only
                 context.tool_settings.mesh_select_mode = (True, False, False)
+                bpy.ops.faceit.lock_3d_view_front('INVOKE_DEFAULT', lock_value=True)
                 bpy.ops.object.mode_set(mode='EDIT')
                 return {'FINISHED'}
 
         # go into previous state / cancel
-        elif event.type in {self.mouse_deselect, 'ESC'} and event.value == 'RELEASE':
-            bpy.ops.object.mode_set(mode='OBJECT')
-            bpy.context.preferences.themes[0].view_3d.vertex_size = context.scene.faceit_vertex_size
+        elif event.type in {'RIGHTMOUSE', 'ESC'} and event.value == 'RELEASE':
 
-            if self.safety_timer <= 0:
-                if obj['state'] == 0:
-                    bpy.data.objects.remove(obj)
-                    return {'CANCELLED'}
-                if obj['state'] == 2:
-                    self.set_init_scale = False
-                if obj['state'] > 0:
-                    obj['state'] = obj['state'] - 1
-                self.safety_timer = 3
+            if current_state == 3:
+                self.report({'INFO'}, "Match the face width!")
+            if current_state == 2:
+                self.report({'INFO'}, "Match the face height")
+                self.set_init_scale = False
+            if current_state > 0:
+                lm_obj["state"] -= 1
+                self.report({'INFO'}, "Align the Landmarks with your characters chin!")
+                return {'RUNNING_MODAL'}
+            if current_state == 0:
+                bpy.data.objects.remove(lm_obj)
+                return {'CANCELLED'}
 
         context.area.tag_redraw()
 
         return {'RUNNING_MODAL'}
 
-    def invoke(self, context, event):
-        self.execute(context)
 
-        context.scene.tool_settings.use_snap = False
+class FACEIT_OT_MaskMainObject(bpy.types.Operator):
+    '''	Mask all geometry that is not assigned to the main face. '''
+    bl_idname = 'faceit.mask_main'
+    bl_label = 'Mask Main Face'
+    bl_options = {'UNDO', 'INTERNAL'}
 
-        # first time launch
-        # get mouse selection from user pref
-        self.mouse_deselect = 'RIGHTMOUSE'
-        self.mouse_select = 'LEFTMOUSE'
+    @classmethod
+    def poll(cls, context):
+        return True
 
-        if futils.get_mouse_select() == 'RIGHT':
-            self.mouse_select = 'RIGHTMOUSE'
-            self.mouse_deselect = 'LEFTMOUSE'
+    def execute(self, context):
 
-        self.set_face_pos(context, event)
-        # get the vertex size user settings - reset after face adaption
-        context.scene.faceit_vertex_size = context.preferences.themes[0].view_3d.vertex_size
-        context.window_manager.modal_handler_add(self)
+        main_obj = futils.get_main_faceit_object()
+        main_group = main_obj.vertex_groups.get("faceit_main")
+        if not main_group:
+            self.report({'ERROR'}, "Couldn't find the faceit_main vertex group. Make sure to assign it in the setup tab.")
+            return {'CANCELLED'}
+        # add the mask modifier
+        mod = main_obj.modifiers.get("Main Mask")
+        if not mod:
+            mod = main_obj.modifiers.new(type='MASK', name="Main Mask")
+        mod.vertex_group = main_group.name
+        mod.show_viewport = True
+        # hide all other faceit objects
+        faceit_objects = futils.get_faceit_objects_list()
+        for obj in faceit_objects:
+            if obj != main_obj:
+                obj.hide_set(True)
 
-        return {'RUNNING_MODAL'}
+        return {'FINISHED'}
+
+
+class FACEIT_OT_MaskGroups(bpy.types.Operator):
+    '''	Mask all geometry that is not assigned to the specified group '''
+    bl_idname = 'faceit.mask_groups'
+    bl_label = 'Mask Main Face'
+    bl_options = {'UNDO', 'INTERNAL'}
+
+    vgroup_name: StringProperty(
+        name="Vertex Group",
+        description="Vertex Group to use for the mask",
+        default="",
+        options={'SKIP_SAVE'}
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return True
+
+    def execute(self, context):
+        faceit_objects = futils.get_faceit_objects_list()
+        mod_name = "Mask " + self.vgroup_name
+        for obj in faceit_objects:
+            if self.vgroup_name in obj.vertex_groups:
+                mod = obj.modifiers.get(mod_name)
+                if not mod:
+                    mod = obj.modifiers.new(type='MASK', name=mod_name)
+                mod.vertex_group = self.vgroup_name
+                mod.show_viewport = True
+            else:
+                # hide all other faceit objects
+                obj.hide_set(True)
+        return {'FINISHED'}
+
+
+class FACEIT_OT_UnmaskMainObject(bpy.types.Operator):
+    '''	Mask all geometry that is not assigned to the main face. '''
+    bl_idname = 'faceit.unmask_main'
+    bl_label = 'Remove Mask'
+    bl_options = {'UNDO', 'INTERNAL'}
+
+    @classmethod
+    def poll(cls, context):
+        return True
+
+    def execute(self, context):
+
+        main_obj = futils.get_main_faceit_object()
+        main_group = None
+        if main_obj:
+            main_group = main_obj.vertex_groups.get("faceit_main")
+        if not main_group:
+            self.report({'WARNING'}, "Couldn't find the faceit_main vertex group. Make sure to assign it in the setup tab.")
+            return {'CANCELLED'}
+        # add the mask modifier
+        mod = main_obj.modifiers.get("Main Mask")
+        if mod:
+            main_obj.modifiers.remove(mod)
+        # mod.vertex_group = main_group
+
+        # hide all other faceit objects
+        faceit_objects = futils.get_faceit_objects_list()
+        for obj in faceit_objects:
+            if obj != main_obj:
+                obj.hide_set(False)
+
+        return {'FINISHED'}
 
 
 class FACEIT_OT_ResetFacial(bpy.types.Operator):
@@ -291,79 +377,56 @@ class FACEIT_OT_ResetFacial(bpy.types.Operator):
             bpy.data.objects.remove(obj)
 
         # Remove locators
-        bpy.ops.faceit.edit_locator_empties('EXEC_DEFAULT', remove=True)
+        bpy.ops.faceit.edit_locator_empties('EXEC_DEFAULT', hide_value=True)
+        # bpy.ops.faceit.edit_locator_empties('EXEC_DEFAULT', remove=True)
+        bpy.ops.faceit.unlock_3d_view()
+        context.scene.tool_settings.use_snap = False
 
-        context.preferences.themes[0].view_3d.vertex_size = context.scene.faceit_vertex_size
         return {'FINISHED'}
 
 
-class FACEIT_OT_SetThemeVertexSize(bpy.types.Operator):
-    '''	Resets the vertex size to the given value @vertex_size '''
-    bl_idname = 'faceit.set_theme_vertex_size'
-    bl_label = 'Set Vertex Size'
-    bl_options = {'UNDO', 'INTERNAL'}
-
-    vertex_size: IntProperty(
-        name='Vertex Size',
-        default=3,
-
-    )
-
-    def execute(self, context):
-
-        context.preferences.themes[0].view_3d.vertex_size = self.vertex_size
-        return{'FINISHED'}
-
-
-class FACEIT_OT_ProjectFacial(bpy.types.Operator):
-    '''Project facial markers '''
-    bl_idname = 'faceit.facial_project'
+class FACEIT_OT_ProjectLandmarks(bpy.types.Operator):
+    '''Project the Landmarks onto the Main Object. (Make sure you assigned to Main Vertex Group correctly) '''
+    bl_idname = 'faceit.project_landmarks'
     bl_label = 'Project Landmarks'
-    bl_options = {'REGISTER', 'UNDO', 'INTERNAL'}
+    bl_options = {'REGISTER', 'UNDO'}
+    mouse_x: bpy.props.IntProperty()
+    mouse_y: bpy.props.IntProperty()
 
     @classmethod
     def poll(cls, context):
-        if bpy.data.objects.get('facial_landmarks'):
-            return True
+        return context.scene.objects.get('facial_landmarks')
 
-    def get_far_point(self, obj, direction):
-        # world matrix
-        mat = obj.matrix_world
-        far_distance = 0
-        far_point = direction
-
-        for v in obj.data.vertices:
-            point = mat @ v.co
-            temp = direction.dot(point)
-            # new high?
-            if far_distance < temp:
-                far_distance = temp
-                far_point = point
-        return far_point
+    def invoke(self, context, event):
+        self.mouse_x = event.mouse_x
+        self.mouse_y = event.mouse_y
+        return self.execute(context)
 
     def execute(self, context):
 
         scene = context.scene
+        bpy.ops.faceit.unlock_3d_view()
+        lm_obj = futils.get_object('facial_landmarks')
+        bpy.ops.faceit.mask_main('EXEC_DEFAULT')
 
-        proj_obj = futils.get_object('facial_landmarks')
-        if proj_obj.mode != 'OBJECT':
+        if context.mode != 'OBJECT':
             bpy.ops.object.mode_set(mode='OBJECT')
-        # duplicate the object
         bpy.ops.object.select_all(action='DESELECT')
-        futils.set_active_object(proj_obj.name)
-
-        # get the face object
+        futils.set_active_object(lm_obj.name)
+        # get the main object
         surface_obj = futils.get_main_faceit_object()
         # move in front of face
         if surface_obj:
-            proj_obj.location.y = self.get_far_point(
-                obj=surface_obj, direction=Vector((0, -1, 0)))[1] - proj_obj.dimensions[1]
+            lm_obj.location.y = get_max_dim_in_direction(
+                obj=surface_obj, direction=Vector((0, -1, 0)))[1] - lm_obj.dimensions[1]
         else:
-            self.report({'ERROR'}, 'Faceit was not able to find a MAIN object. Did you register it properly?')
-            return{'CANCELLED'}
+            self.report({'ERROR'}, 'Please assign the main group to the face mesh (Setup tab)')
+            return {'CANCELLED'}
 
+        # get vert positions before and after projecting
+        vert_pos_before = [Vector(round(x, 3) for x in v.co) for v in lm_obj.data.vertices]
         # projection modifier
-        mod = proj_obj.modifiers.new(name='ShrinkWrap', type='SHRINKWRAP')
+        mod = lm_obj.modifiers.new(name='ShrinkWrap', type='SHRINKWRAP')
         mod.target = surface_obj
         mod.wrap_method = 'PROJECT'
         mod.use_project_y = True
@@ -372,31 +435,178 @@ class FACEIT_OT_ProjectFacial(bpy.types.Operator):
         # apply the modifier
         bpy.ops.object.modifier_apply(modifier=mod.name)
 
-        # go to edit mode and refine the positions1
-
-        # Go to Side view
-        for area in bpy.context.screen.areas:
-            if area.type == 'VIEW_3D':
-                override = bpy.context.copy()
-                override['area'] = area
-                bpy.ops.view3d.view_selected(use_all_regions=False)
-                bpy.ops.view3d.view_axis(override, type='RIGHT')
-                break
+        bpy.ops.view3d.view_selected(use_all_regions=False)
+        bpy.ops.view3d.view_axis(type='RIGHT')
 
         chin_vert = 0 if scene.faceit_asymmetric else 1
-        obj_origin = proj_obj.matrix_world @ proj_obj.data.vertices[chin_vert].co
+        obj_origin = lm_obj.matrix_world @ lm_obj.data.vertices[chin_vert].co
         context.scene.cursor.location = obj_origin
-        proj_obj['state'] = 4
-        bpy.ops.object.origin_set(type='ORIGIN_CURSOR', center='MEDIAN')
+        # bpy.ops.object.origin_set(type='ORIGIN_CURSOR', center='MEDIAN')
         scene.tool_settings.use_snap = True
         scene.tool_settings.snap_elements = {'FACE'}
         scene.tool_settings.snap_target = 'CLOSEST'
         scene.tool_settings.use_snap_project = True
 
-        bpy.ops.ed.undo_push()
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.mesh.select_all(action='SELECT')
+        # get vert positions after projecting
+        vert_pos_after = [Vector(round(x, 3) for x in v.co) for v in lm_obj.data.vertices]
+        success = True
+        for i in range(len(vert_pos_before)):
+            if vert_pos_after[i] == vert_pos_before[i]:
+                success = False
+                break
+        if not success:
+            self.report(
+                {'WARNING'},
+                "It looks like not all vertices were projected correctly. Align them manually or repeat the projection.")
+            # return {'CANCELLED'}
+        else:
+            self.report({'INFO'}, "Fine-tune the landmarks in Edit mode until they match the face.")
 
+        bpy.ops.ed.undo_push()
+        lm_obj["state"] = 4
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.faceit.unmask_main('EXEC_DEFAULT')
+        return {'FINISHED'}
+
+
+class FACEIT_OT_RevertProjection(bpy.types.Operator):
+    '''Revert landmark projection and edit in front view'''
+    bl_idname = 'faceit.revert_projection'
+    bl_label = 'Revert Projection (Edit Front)'
+    bl_options = {'UNDO', 'INTERNAL'}
+
+    @classmethod
+    def poll(cls, context):
+        return True
+
+    def execute(self, context):
+        lm_obj = futils.get_object("facial_landmarks")
+        futils.set_hidden_state_object(lm_obj, False, False)
+        if context.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        futils.clear_object_selection()
+        futils.set_active_object(lm_obj.name)
+        # bpy.ops.object.mode_set(mode='EDIT')
+        for v in lm_obj.data.vertices:
+            v.select = True
+            v.co.y = 0
+        # return {'FINISHED'}
+        main_obj = futils.get_main_faceit_object()
+        lm_obj.location.y = get_max_dim_in_direction(
+            obj=main_obj, direction=Vector((0, -1, 0)))[1] - lm_obj.dimensions[1]
+        # bpy.ops.ed.undo_push()
+        lm_obj["state"] -= 1
+        bpy.ops.faceit.lock_3d_view_front('INVOKE_DEFAULT')
+        return {'FINISHED'}
+
+
+class FACEIT_OT_Lock3DViewFront(bpy.types.Operator):
+    '''Lock the 3D view rotation and enable Front view'''
+    bl_idname = 'faceit.lock_3d_view_front'
+    bl_label = 'Set Front View'
+    bl_options = {'UNDO', 'INTERNAL'}
+
+    mouse_x: bpy.props.IntProperty()
+    mouse_y: bpy.props.IntProperty()
+
+    lock_value: BoolProperty(
+        name='Lock',
+        default=False,
+        description='Lock the 3D view rotation',
+        options={'SKIP_SAVE'}
+    )
+    set_edit_mode: BoolProperty(
+        name="Edit",
+        default=True,
+        description="useful when the context area is not available (e.g. in handlers)",
+        options={'SKIP_SAVE'}
+    )
+
+    find_area_by_mouse_position: BoolProperty(
+        name="Edit",
+        default=False,
+        description="useful when the context area is not available (e.g. in handlers)",
+        options={'SKIP_SAVE'}
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return True
+
+    def invoke(self, context, event):
+        self.mouse_x = event.mouse_x
+        self.mouse_y = event.mouse_y
+        return self.execute(context)
+
+    def execute(self, context):
+        # scene = context.scene
+        # TODO: Exit local view
+        active_area = context.area
+        region_3d = None
+        original_context = False
+        if active_area:
+            original_context = True
+            region_3d = active_area.spaces.active.region_3d
+        else:
+            for area in bpy.context.screen.areas:
+                if area.type == 'VIEW_3D':
+                    if check_if_area_is_active(area, self.mouse_x, self.mouse_y):
+                        active_area = area
+                        for space in area.spaces:
+                            if space.type == 'VIEW_3D':
+                                region_3d = space.region_3d
+                                break
+        lm_obj = futils.get_object('facial_landmarks')
+        if self.set_edit_mode:
+            context.view_layer.objects.active = lm_obj
+            bpy.ops.object.mode_set()
+            futils.clear_object_selection()
+            lm_obj.select_set(state=True)
+
+        set_front_view(region_3d)
+        if original_context:
+            if check_is_quad_view(active_area):
+                bpy.ops.screen.region_quadview()
+        #     bpy.ops.view3d.view_selected(use_all_regions=False)
+        if self.set_edit_mode:
+            bpy.ops.object.mode_set(mode='EDIT')
+        return {'FINISHED'}
+
+
+class FACEIT_OT_Unlock3DView(bpy.types.Operator):
+    '''Lock the 3D view rotation and enable Front view'''
+    bl_idname = 'faceit.unlock_3d_view'
+    bl_label = 'Unlock 3D View'
+    bl_options = {'UNDO', 'INTERNAL'}
+
+    @classmethod
+    def poll(cls, context):
+        return True
+
+    def execute(self, context):
+        unlock_3d_view()
+        return {'FINISHED'}
+
+
+class FACEIT_OT_ResetSnapSettings(bpy.types.Operator):
+    '''Set the correct Snap to Face Settings automatically.'''
+    bl_idname = 'faceit.reset_snap_settings'
+    bl_label = 'Reset Snap Settings'
+    bl_options = {'UNDO', 'INTERNAL'}
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def draw(self, context):
+        layout = self.layout
+        draw_text_block(layout, text="Reset to optimal Snap to Face Settings?")
+
+    def execute(self, context):
+        scene = context.scene
+        scene.tool_settings.use_snap = True
+        scene.tool_settings.snap_elements = {'FACE'}
+        scene.tool_settings.snap_target = 'CLOSEST'
+        scene.tool_settings.use_snap_project = True
         return {'FINISHED'}
 
 
@@ -414,10 +624,12 @@ class FACEIT_OT_MirrorSelectedVerts(bpy.types.Operator):
         name='Mirror Direction'
     )
 
-    @classmethod
+    @ classmethod
     def poll(cls, context):
-        if context.object.name == 'facial_landmarks' and context.mode == 'EDIT_MESH':
-            return True
+        obj = context.object
+        if obj:
+            if obj.name == 'facial_landmarks' and context.mode == 'EDIT_MESH':
+                return True
 
     def execute(self, context):
 
@@ -440,7 +652,7 @@ class FACEIT_OT_MirrorSelectedVerts(bpy.types.Operator):
         else:
             bpy.ops.object.mode_set(mode='EDIT')
             self.report({'WARNING'}, 'Select either Left or Right Side Vertices')
-            return{'FINISHED'}
+            return {'FINISHED'}
 
         for left_vert, right_vert in zip(left_verts, right_verts):
             if self.mirror_dir == 'L_R':
@@ -457,205 +669,6 @@ class FACEIT_OT_MirrorSelectedVerts(bpy.types.Operator):
                 left_vert.co = mirror_co @ m_loc
 
         bpy.ops.object.mode_set(mode='EDIT')
-        return{'FINISHED'}
-
-
-class FACEIT_OT_EditLocatorEmpties(bpy.types.Operator):
-    '''	Edit Locator Empties visibility or remove'''
-    bl_idname = 'faceit.edit_locator_empties'
-    bl_label = 'Show Locator Empties'
-    bl_options = {'UNDO', 'INTERNAL'}
-
-    remove: BoolProperty(
-        name='Remove All',
-        default=False,
-        options={'SKIP_SAVE'}
-    )
-
-    hide_value: BoolProperty(
-        name='Hide/Show',
-        default=False,
-        options={'SKIP_SAVE'}
-    )
-
-    @classmethod
-    def poll(cls, context):
-        return True
-        # return any([n in bpy.data.objects for n in lm_utils.locators])
-
-    def execute(self, context):
-
-        for n in lm_data.LOCATOR_NAMES:
-            loc_obj = futils.get_object(n)
-            if loc_obj:
-                if self.remove:
-                    bpy.data.objects.remove(loc_obj, do_unlink=True)
-                    continue
-                futils.set_hidden_state_object(loc_obj, self.hide_value, self.hide_value)
-                # loc_obj.hide_viewport = self.hide_value
-
-        if self.remove:
-            context.scene.show_locator_empties = True
-        else:
-            context.scene.show_locator_empties = not self.hide_value
-
-        return {'FINISHED'}
-
-
-class FACEIT_OT_GenerateLocatorEmpties(bpy.types.Operator):
-    '''	Create empties at relevant locations to be used as new target for the bones in creating the rig '''
-    bl_idname = 'faceit.generate_locator_empties'
-    bl_label = 'Create Locator Empties'
-    bl_options = {'UNDO', 'INTERNAL'}
-
-    @classmethod
-    def poll(cls, context):
-        return context.mode == 'OBJECT' and bpy.data.objects.get('facial_landmarks')
-        # return True
-
-    def execute(self, context):
-        lm_obj = futils.get_object('facial_landmarks')
-        faceit_collection = futils.get_faceit_collection(force_access=True, create=False)
-        if not faceit_collection:
-            return
-
-        faceit_objects = futils.get_faceit_objects_list()
-
-        # Remove Empties that exist already
-        bpy.ops.faceit.edit_locator_empties('EXEC_DEFAULT', remove=True)
-
-        futils.clear_object_selection()
-
-        def create_empty_from_bounds(name, bounds, position):
-            obj = bpy.data.objects.new(name, None)
-            obj.empty_display_type = 'PLAIN_AXES'
-            faceit_collection.objects.link(obj)
-            obj.location = position
-            size = (bounds[0].z - bounds[1].z) / 2
-            obj.empty_display_size = size
-            obj.show_name = True
-            obj.select_set(state=True)
-            obj.show_in_front = True
-
-        # ----------------- LEFT EYE LOCATOR --------------------
-
-        vgroup_name = 'faceit_left_eyeball'
-        obj = vg_utils.get_objects_with_vertex_group(vgroup_name, objects=faceit_objects)
-        if obj:
-            # Get vertices
-            vs = vg_utils.get_verts_in_vgroup(obj, vgroup_name)
-            global_vs = [obj.matrix_world @ v.co for v in vs]
-
-            bounds = rig_utils.get_bounds_from_locations(global_vs, 'z')
-            pos = futils.get_median_pos(bounds)
-
-            create_empty_from_bounds('eye_locator_L', bounds, pos)
-
-        else:
-            self.report({'WARNING'}, 'Can\'t find {} vertex group. Please register it first.'.format(vgroup_name))
-
-        # ----------------- RIGHT EYE LOCATOR --------------------
-
-        vgroup_name = 'faceit_right_eyeball'
-        obj = vg_utils.get_objects_with_vertex_group(vgroup_name, objects=faceit_objects)
-        if obj:
-            # Get vertices
-            vs = vg_utils.get_verts_in_vgroup(obj, vgroup_name)
-            global_vs = [obj.matrix_world @ v.co for v in vs]
-
-            bounds = rig_utils.get_bounds_from_locations(global_vs, 'z')
-            pos = futils.get_median_pos(bounds)
-
-            create_empty_from_bounds('eye_locator_R', bounds, pos)
-        else:
-            self.report({'WARNING'}, 'Can\'t find {} vertex group. Please register it first.'.format(vgroup_name))
-
-        # ----------------- TEETH UPPER LOCATOR --------------------
-
-        vgroup_name = 'faceit_upper_teeth'
-        obj = vg_utils.get_objects_with_vertex_group(vgroup_name, objects=faceit_objects)
-        if obj:
-            # Get vertices
-            vs = vg_utils.get_verts_in_vgroup(obj, vgroup_name)
-            global_vs = [obj.matrix_world @ v.co for v in vs]
-
-            bounds = rig_utils.get_bounds_from_locations(global_vs, 'z')
-            bounds.append(min(global_vs, key=attrgetter('y')))
-
-            pos = futils.get_median_pos(bounds)
-            pos.x = 0
-
-            create_empty_from_bounds('teeth_upper_locator', bounds, pos)
-        else:
-            self.report({'WARNING'}, 'Can\'t find {} vertex group. Please register it first.'.format(vgroup_name))
-
-        # ----------------- TEETH UPPER LOCATOR --------------------
-
-        vgroup_name = 'faceit_lower_teeth'
-        obj = vg_utils.get_objects_with_vertex_group(vgroup_name, objects=faceit_objects)
-        if obj:
-            # Get vertices
-            vs = vg_utils.get_verts_in_vgroup(obj, vgroup_name)
-            global_vs = [obj.matrix_world @ v.co for v in vs]
-
-            bounds = rig_utils.get_bounds_from_locations(global_vs, 'z')
-            bounds.append(min(global_vs, key=attrgetter('y')))
-
-            pos = futils.get_median_pos(bounds)
-            pos.x = 0
-
-            create_empty_from_bounds('teeth_lower_locator', bounds, pos)
-        else:
-            self.report({'WARNING'}, 'Can\'t find {} vertex group. Please register it first.'.format(vgroup_name))
-
-        # ----------------- TONGUE LOCATORS --------------------
-        # | - 3 Tongue bones distributed between tip and rear
-        # ------------------------------------------------------
-
-        # # apply same offset to all tongue bones
-        # tip_tongue = rig_utils.get_median_position_from_vert_grp('faceit_tongue')
-        # if tip_tongue:
-        #     vec = l_mat @ tip_tongue - edit_bones['tongue'].head
-        #     for b in vert_dict[108]['all']:
-        #         bone = edit_bones[b]
-        #         bone.translate(vec)
-        # else:
-        #     self.report({'WARNING'}, 'could not find tongue,   define teeth group first!')
-        #     for b in vert_dict[108]['all']:
-        #         bone = edit_bones[b]
-        #         edit_bones.remove(bone)
-
-        # tongue_0 = futils.get_object('tongue_0_locator')
-        # if tongue_0:
-        #     bpy.data.objects.remove(tongue_0)
-        # tongue_1 = futils.get_object('tongue_1_locator')
-        # if tongue_1:
-        #     bpy.data.objects.remove(tongue_1)
-        # tongue_2 = futils.get_object('tongue_2_locator')
-        # if tongue_2:
-        #     bpy.data.objects.remove(tongue_2)
-
-        # vgroup_name = 'faceit_tongue'
-        # obj = vg_utils.get_objects_with_vertex_group(vgroup_name, objects=faceit_objects)
-        # if obj:
-
-        #     # Get vertices
-        #     vs = vg_utils.get_verts_in_vgroup(obj, vgroup_name)
-        #     global_vs = [obj.matrix_world @ v.co for v in vs]
-
-        #     position = min(global_vs, key=attrgetter('y'))
-        #     # bounds = rig_utils.get_bounds_from_locations(global_vs, 'z')
-        #     # bounds.extend(rig_utils.get_bounds_from_locations(global_vs, 'y'))
-        #     for i in range(3):
-
-        #     eye_R_empty = bpy.data.objects.new('teeth_lower_locator', None)
-        #     eye_R_empty.empty_display_type = 'PLAIN_AXES'
-        #     faceit_collection.objects.link(eye_R_empty)
-        #     eye_R_empty.location = position
-
-        #     up_dim = (bounds[0].z - bounds[1].z)/2
-        #     eye_R_empty.empty_display_size = up_dim  # (up_dim,)*3
-
         return {'FINISHED'}
 
 
@@ -687,7 +700,7 @@ class FACEIT_OT_ResetToLandmarks(bpy.types.Operator):
     rig_bound = False
     corr_sk = False
 
-    @classmethod
+    @ classmethod
     def poll(cls, context):
         rig = futils.get_faceit_armature()
 
@@ -781,19 +794,19 @@ class FACEIT_OT_ResetToLandmarks(bpy.types.Operator):
 
         # turn on landmarks visibility
         lm = bpy.data.objects.get('facial_landmarks')
-        bpy.ops.faceit.edit_locator_empties('EXEC_DEFAULT', hide_value=False)
+        # bpy.ops.faceit.edit_locator_empties('EXEC_DEFAULT', hide_value=False)
 
         if lm:
             futils.set_hidden_state_object(lm, False, False)
         else:
-            self.report({'WARNING'}, 'Landmarks mesh does not exist anymore.')
+            self.report({'ERROR'}, 'Landmarks mesh does not exist anymore.')
+            return {'CANCELLED'}
 
-        scene.faceit_vertex_size = context.preferences.themes[0].view_3d.vertex_size
-        context.preferences.themes[0].view_3d.vertex_size = 8
-
-        # if bpy.app.version >= (2, 83, 0):
+        bpy.ops.faceit.edit_landmarks('EXEC_DEFAULT')
         bpy.ops.outliner.orphans_purge()
-        return{'FINISHED'}
+        scene.tool_settings.use_snap = True
+        scene.tool_settings.mesh_select_mode = (True, False, False)
+        return {'FINISHED'}
 
 
 class FACEIT_OT_EditLandmarks(bpy.types.Operator):
@@ -802,33 +815,27 @@ class FACEIT_OT_EditLandmarks(bpy.types.Operator):
     bl_label = 'Edit Landmarks'
     bl_options = {'UNDO', 'INTERNAL'}
 
-    @classmethod
+    @ classmethod
     def poll(cls, context):
-        return context.mode == 'OBJECT' and bpy.data.objects.get('facial_landmarks')
+        lm_obj = bpy.data.objects.get('facial_landmarks')
+        if lm_obj:
+            return context.object != lm_obj or context.mode != 'EDIT_MESH'
 
     def execute(self, context):
         scene = context.scene
-
-        # turn on landmarks visibility
         lm = bpy.data.objects.get('facial_landmarks')
-        bpy.ops.faceit.edit_locator_empties('EXEC_DEFAULT', hide_value=False)
+        futils.set_hidden_state_object(lm, False, False)
 
-        if lm:
-            futils.set_hidden_state_object(lm, False, False)
-        else:
-            self.report({'WARNING'}, 'Landmarks mesh does not exist anymore.')
-
-        scene.faceit_vertex_size = context.preferences.themes[0].view_3d.vertex_size
-        context.preferences.themes[0].view_3d.vertex_size = 8
-
+        if context.mode != 'OBJECT':
+            # if not context.object:
+            #     context.view_layer.objects.active = lm
+            bpy.ops.object.mode_set(mode='OBJECT')
+        # else:
         futils.clear_object_selection()
-
         futils.set_active_object(lm.name)
         bpy.ops.object.mode_set(mode='EDIT')
 
-        # if bpy.app.version >= (2, 83, 0):
-        # bpy.ops.outliner.orphans_purge()
-        return{'FINISHED'}
+        return {'FINISHED'}
 
 
 class FACEIT_OT_FinishEditLandmarks(bpy.types.Operator):
@@ -837,7 +844,7 @@ class FACEIT_OT_FinishEditLandmarks(bpy.types.Operator):
     bl_label = 'Edit Landmarks'
     bl_options = {'UNDO', 'INTERNAL'}
 
-    @classmethod
+    @ classmethod
     def poll(cls, context):
         if context.object:
             return context.object.name == 'facial_landmarks' and context.mode == 'EDIT_MESH'
@@ -846,13 +853,14 @@ class FACEIT_OT_FinishEditLandmarks(bpy.types.Operator):
         scene = context.scene
 
         lm = bpy.data.objects.get('facial_landmarks')
-        bpy.ops.faceit.edit_locator_empties('EXEC_DEFAULT', hide_value=True)
+        # rig = futils.get_faceit_armature(force_original=True)
+        # if rig:
+        # bpy.ops.faceit.edit_locator_empties('EXEC_DEFAULT', hide_value=True)
 
         # turn off landmarks visibility
-        if lm:
-            futils.set_hidden_state_object(lm, True, False)
+        # if lm:
+        #     futils.set_hidden_state_object(lm, True, False)
 
-        context.preferences.themes[0].view_3d.vertex_size = scene.faceit_vertex_size
-
+        bpy.ops.faceit.unmask_main('EXEC_DEFAULT')
         bpy.ops.object.mode_set(mode='OBJECT')
-        return{'FINISHED'}
+        return {'FINISHED'}

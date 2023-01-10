@@ -8,37 +8,57 @@ from ..core.faceit_utils import get_faceit_objects_list
 CORRECTIVE_SK_ACTION_NAME = 'faceit_corrective_shape_keys'
 
 
-def reevaluate_corrective_shape_keys(expression_list, objects):
+def reevaluate_corrective_shape_keys(expression_list=None, objects=None):
     ''' Re-evaluate the keyframes and properties (in @expression_list) in correspondence to the found corrective shape keys (on @objects). '''
+    if not expression_list:
+        expression_list = bpy.context.scene.faceit_expression_list
+    if not objects:
+        objects = get_faceit_objects_list()
+
     for obj in objects:
         if has_shape_keys(obj):
-
             found_corrective_shapes = False
-
             for exp_item in expression_list:
-
                 corr_sk = obj.data.shape_keys.key_blocks.get('faceit_cc_' + exp_item.name)
                 if corr_sk:
-
                     corr_sk.mute = False
                     exp_item.corr_shape_key = True
-
                     keyframe_corrective_sk_action(exp_item)
-
                     found_corrective_shapes = True
-
             if found_corrective_shapes:
                 a = get_corrective_sk_action()
-
                 if not getattr(obj.data.shape_keys, 'animation_data'):
                     obj.data.shape_keys.animation_data_create()
                 obj.data.shape_keys.animation_data.action = a
 
 
+def mute_corrective_shape_keys(expression_list=None, objects=None):
+    '''Mute all corrective shape keys'''
+    if not expression_list:
+        expression_list = bpy.context.scene.faceit_expression_list
+    if not objects:
+        objects = get_faceit_objects_list()
+
+    for obj in objects:
+        if has_shape_keys(obj):
+            found_corrective_shapes = False
+            for exp_item in expression_list:
+                corr_sk = obj.data.shape_keys.key_blocks.get('faceit_cc_' + exp_item.name)
+                if corr_sk:
+                    corr_sk.mute = True
+                    found_corrective_shapes = True
+            if found_corrective_shapes:
+                if obj.data.shape_keys.animation_data:
+                    if obj.data.shape_keys.animation_data.action == get_corrective_sk_action():
+                        obj.data.shape_keys.animation_data.action = None
+
+
 def get_corrective_sk_action(clear_invalid_fcurves=True, create=True):
-
+    '''Return the corrective shape key action. 
+        @clear_invalid_fcurves: If True, remove all fcurves that are not corrective shape keys.
+        @create: create the action if it doesn't exist.
+    '''
     action = bpy.data.actions.get(CORRECTIVE_SK_ACTION_NAME)
-
     if not action:
         if create:
             action = bpy.data.actions.new(CORRECTIVE_SK_ACTION_NAME)
@@ -46,9 +66,8 @@ def get_corrective_sk_action(clear_invalid_fcurves=True, create=True):
     elif clear_invalid_fcurves:
         # Purge old data-paths not valid
         for fc in action.fcurves:
-            if not fc.is_valid:
+            if not fc.data_path.startswith('key_blocks["faceit_cc_') or not fc.is_valid:
                 action.fcurves.remove(fc)
-
     return action
 
 

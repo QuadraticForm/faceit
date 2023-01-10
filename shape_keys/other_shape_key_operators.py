@@ -2,11 +2,148 @@ import bpy
 import numpy as np
 from bpy.props import BoolProperty, EnumProperty, StringProperty
 
+from ..core.modifier_utils import apply_modifier
+
 from ..core import faceit_data as fdata
 from ..core import faceit_utils as futils
 from ..core import fc_dr_utils
 from ..core import retarget_list_utils as rutils
 from ..core import shape_key_utils as sk_utils
+
+
+class FACEIT_OT_ClearShapeKeyAction(bpy.types.Operator):
+    '''Apply Shape Keys to the active mesh'''
+    bl_idname = 'faceit.clear_shape_key_action'
+    bl_label = 'Clear Shape Key Action'
+    bl_options = {'UNDO', 'INTERNAL'}
+
+    obj_name: StringProperty(
+        name="Object Name",
+        default="",
+        options={'HIDDEN', 'SKIP_SAVE'},
+    )
+
+    def execute(self, context):
+        objects = [context.scene.objects.get(self.obj_name)]
+        if not objects:
+            objects = futils.get_faceit_objects_list()
+        for obj in objects:
+            shape_keys = obj.data.shape_keys
+            if shape_keys:
+                if shape_keys.animation_data:
+                    shape_keys.animation_data.action = None
+                    item = context.scene.faceit_face_objects.get(obj.name)
+                    if item:
+                        item.warnings = item.warnings.strip('SHAPEKEYS,')
+        return {'FINISHED'}
+
+
+def get_shape_keys_apply_options(self, context):
+    return(
+        ('KEEP', "Keep", "Apply the current shape key values to the basis mesh. The applied shape keys will be set to 0.0."),
+        ('DRIVEN', "Keep Driven", "Apply the current shape key values to the basis mesh. Remove the shape keys if they are not driven or corrective shapes"),
+        ('REMOVE', "Remove", "Apply the current shape key values to the basis mesh and remove all shape keys, except corrective shapes."),
+    )
+
+
+class FACEIT_OT_ApplyShapeKeysToMesh(bpy.types.Operator):
+    '''Apply Shape Keys to the active mesh'''
+    bl_idname = 'faceit.apply_shape_keys_to_mesh'
+    bl_label = 'Apply Shape Keys to Mesh'
+    bl_options = {'UNDO', 'INTERNAL'}
+
+    apply_option: EnumProperty(
+        name="Apply Options",
+        items=get_shape_keys_apply_options
+    )
+    obj_name: StringProperty(
+        name="Object Name",
+        default="",
+        options={'HIDDEN', 'SKIP_SAVE'},
+    )
+    strip_warning: BoolProperty(
+        name="Strip Warning",
+        default=False,
+        options={'HIDDEN', 'SKIP_SAVE'},
+    )
+    keep_corrective_shape_keys: BoolProperty(
+        name="Keep Corrective Shape Keys",
+        description="Keep corrective shape keys if apply option is set to REMOVE",
+        default=False,
+        options={'HIDDEN', 'SKIP_SAVE'},
+    )
+
+    def invoke(self, context, event):
+        obj = context.scene.objects.get(self.obj_name)
+        if not obj:
+            self.report({'ERROR'}, 'Please select an object')
+            return {'CANCELLED'}
+        return context.window_manager.invoke_props_dialog(self)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, 'apply_option', expand=True)
+
+    def execute(self, context):
+        state_dict = futils.save_scene_state(context)
+        context.scene.tool_settings.use_keyframe_insert_auto = False
+
+        if futils.get_object_mode_from_context_mode(context.mode) != 'OBJECT' and context.object is not None:
+            bpy.ops.object.mode_set()
+
+        obj = context.scene.objects.get(self.obj_name)
+        futils.set_active_object(obj)
+
+        shape_keys = obj.data.shape_keys
+        if not shape_keys:
+            # self.report({'INFO'}, 'No shape keys found')
+            return {'CANCELLED'}
+        driven_sk = []
+        for sk in shape_keys.key_blocks[1:]:
+            for dr in shape_keys.animation_data.drivers:
+                if 'key_blocks["{}"].'.format(sk.name) in dr.data_path:
+                    sk.mute = True
+                    driven_sk.append(sk.name)
+
+        bpy.ops.object.mode_set()
+        obj.active_shape_key_index = 0
+        apply_sk = obj.shape_key_add(from_mix=True)
+        apply_sk.value = 1.0
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.reveal(select=False)
+        bpy.ops.mesh.select_all(action='SELECT')
+        bpy.ops.mesh.blend_from_shape(shape=apply_sk.name, add=True)
+        bpy.ops.object.mode_set(mode='OBJECT')
+        obj.shape_key_remove(apply_sk)
+
+        for sk in shape_keys.key_blocks[1:]:
+            if sk.name.startswith('faceit_cc_') and self.keep_corrective_shape_keys:
+                continue
+            if self.apply_option == 'REMOVE':
+                obj.shape_key_remove(sk)
+                continue
+            if sk.name in driven_sk:
+                sk.mute = False
+                continue
+            if self.apply_option == 'DRIVEN':
+                obj.shape_key_remove(sk)
+            else:
+                if sk.slider_min > 0:
+                    sk.slider_min = 0
+                if sk.slider_max < 0:
+                    sk.slider_max = 0
+                sk.value = 0
+        if self.strip_warning:
+            item = context.scene.faceit_face_objects[self.obj_name]
+            if not obj.data.shape_keys:
+                item.warnings = item.warnings.strip('SHAPEKEYS,')
+            else:
+                if all(sk.value == 0 for sk in obj.data.shape_keys.key_blocks[1:]):
+                    item.warnings = item.warnings.strip('SHAPEKEYS,')
+                else:
+                    self.report({'WARNING'}, 'Some shape keys are not at 0.0')
+        futils.restore_scene_state(context, state_dict)
+        return {'FINISHED'}
 
 
 class FACEIT_OT_GenerateTestAction(bpy.types.Operator):
@@ -27,7 +164,7 @@ class FACEIT_OT_GenerateTestAction(bpy.types.Operator):
 
         scene = context.scene
 
-        face_objects = futils.get_faceit_objects_list()
+        faceit_objects = futils.get_faceit_objects_list()
 
         test_action = bpy.data.actions.get('faceit_bake_test_action')
 
@@ -40,7 +177,7 @@ class FACEIT_OT_GenerateTestAction(bpy.types.Operator):
 
         # shape_dict = {item['name']: item['index'] for item in shape_dict.values()}
 
-        for obj in face_objects:
+        for obj in faceit_objects:
             # deselect all
             shape_keys = obj.data.shape_keys
             if not shape_keys:
@@ -56,12 +193,20 @@ class FACEIT_OT_GenerateTestAction(bpy.types.Operator):
             # for expression_name, index in shape_dict.items():
             for i, item in enumerate(scene.faceit_expression_list):
                 i += 1
+                frame = i * 10
                 # i = int(index) + 1
                 sk = shape_keys.get(item.name)
                 if not sk or sk.name == 'Basis':
                     continue
-
-                frame = i * 10
+                if sk.name == 'mouthClose':
+                    jaw_sk = shape_keys.get('jawOpen')
+                    if jaw_sk:
+                        jaw_sk.value = 0
+                        jaw_sk.keyframe_insert(data_path='value', frame=frame - 9)
+                        jaw_sk.keyframe_insert(data_path='value', frame=frame + 1)
+                        jaw_sk.value = 1
+                        jaw_sk.keyframe_insert(data_path='value', frame=frame)
+                        jaw_sk.value = 0
 
                 sk.value = 0
                 sk.keyframe_insert(data_path='value', frame=frame - 9)
@@ -73,7 +218,7 @@ class FACEIT_OT_GenerateTestAction(bpy.types.Operator):
         scene.frame_start = 1
         scene.frame_end = i * 10
 
-        return{'FINISHED'}
+        return {'FINISHED'}
 
 
 class FACEIT_OT_SetShapeKeyRange(bpy.types.Operator):
@@ -137,25 +282,25 @@ class FACEIT_OT_SetShapeKeyRange(bpy.types.Operator):
         if self.effect_objects == 'ALL':
             if not faceit_objects:
                 self.report({'ERROR'}, 'Please register the character geometry in the Setup panel.')
-                return{'CANCELLED'}
+                return {'CANCELLED'}
             objects_to_effect.extend(faceit_objects)
         elif self.effect_objects == 'SELECTED':
             if not context.selected_objects:
                 self.report({'ERROR'}, 'Select an Object first')
-                return{'CANCELLED'}
+                return {'CANCELLED'}
 
             objects_to_effect.extend([obj for obj in context.selected_objects if obj.type == 'MESH'])
         elif self.effect_objects == 'ACTIVE':
             if not active_object:
                 self.report({'ERROR'}, 'Select an Object first')
-                return{'CANCELLED'}
+                return {'CANCELLED'}
             objects_to_effect.append(active_object)
 
         if self.effect_shapes == 'ACTIVE':
             active_key = active_object.active_shape_key
             if not active_key:
                 self.report({'ERROR'}, 'Select a Shape Key in the properties panel first')
-                return{'CANCELLED'}
+                return {'CANCELLED'}
             shapes_to_effect.append(active_key.name)
         if self.effect_shapes in ('FACEIT', 'ARKIT'):
             shapes_to_effect.extend(rutils.get_all_set_target_shapes(scene.faceit_arkit_retarget_shapes))
@@ -172,13 +317,12 @@ class FACEIT_OT_SetShapeKeyRange(bpy.types.Operator):
 
         if not objects_to_effect:
             self.report({'ERROR'}, 'No objects found to effect')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         if not shapes_to_effect:
             self.report({'ERROR'}, 'No shapes found to effect')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
-        print(shapes_to_effect)
         effect_any = False
         for obj in objects_to_effect:
             if not sk_utils.has_shape_keys(obj):
@@ -199,7 +343,7 @@ class FACEIT_OT_SetShapeKeyRange(bpy.types.Operator):
             self.report({'INFO'}, 'Succesfully set new slider ranges')
         else:
             self.report({'ERROR'}, 'No Shape Keys effected, because they were not found on specified object(s)')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         # Update Control rig
         # if scene.faceit_control_rig_connected:
@@ -218,73 +362,6 @@ class FACEIT_OT_SetShapeKeyRange(bpy.types.Operator):
         for a in context.screen.areas:
             if a.type == 'PROPERTIES':
                 a.tag_redraw()
-
-        return{'FINISHED'}
-
-
-class FACEIT_OT_TransferShapeKeys(bpy.types.Operator):
-    '''For Rigged Characters... Transfer all Shape Keys from selected to active.'''
-    bl_idname = 'faceit.transfer_shape_keys'
-    bl_label = 'Transfer Shape Keys'
-    bl_options = {'UNDO'}
-
-    @ classmethod
-    def poll(cls, context):
-        if context.mode == 'OBJECT':
-            if len(context.selected_objects) == 2:
-                return True
-
-    def execute(self, context):
-        scene = context.scene
-
-        def store_shape_keys(obj):
-            ''' Store all shapekeys data in numpy arrays for @obj'''
-            vert_count = len(obj.data.vertices)
-            sk_dict = {}
-            for sk in obj.data.shape_keys.key_blocks[1:]:
-                # numpy array with shapekey data
-                sk_data = np.zeros(vert_count * 3, dtype=np.float32)
-                sk.data.foreach_get('co', sk_data.ravel())
-
-                sk_dict[sk.name] = sk_data
-            return sk_dict
-
-        def apply_stored_shape_keys(obj, sk_dict):
-            ''' Apply the saved shapekey data from @sk_dict to objects shapekeys in new order from @export_order_dict '''
-            # The new index for the shapekey with name shapekey_name
-            for shapekey_name, sk_data in sk_dict.items():
-                # the new shapekey
-                new_sk = obj.shape_key_add(name=shapekey_name)
-                new_sk.data.foreach_set('co', sk_data.ravel())
-
-        active_obj = context.view_layer.objects.active
-        selected_obj = [obj for obj in context.selected_objects if obj is not active_obj][0]
-
-        # check if both objects are meshes
-        if not (active_obj.type == 'MESH' and selected_obj.type == 'MESH'):
-            self.report({'ERROR'}, 'You can only transfer Shape Keys between Meshes.')
-            return{'CANCELLED'}
-
-        if not len(active_obj.data.vertices) == len(selected_obj.data.vertices):
-            self.report({'ERROR'}, 'Both objects need the same Vertex Count to Transfer Shape Keys..')
-            return{'CANCELLED'}
-
-        if not selected_obj.data.shape_keys:
-            self.report({'ERROR'}, 'No Shape Keys found on selected object.')
-            return{'CANCELLED'}
-
-        if scene.faceit_overwrite_shape_keys_on_transfer:
-            active_obj.shape_key_clear()
-
-        # Copy Shape Keys from active to selected objects...
-        sk_dict = store_shape_keys(selected_obj)
-
-        if not active_obj.data.shape_keys:
-            active_obj.shape_key_add(name='Basis')
-
-        self.report({'INFO'}, 'transfer sk from {} to {}'.format(selected_obj.name, active_obj.name))
-
-        apply_stored_shape_keys(active_obj, sk_dict)
 
         return {'FINISHED'}
 
@@ -400,13 +477,13 @@ class FACEIT_OT_ReorderKeys(bpy.types.Operator):
 
         if order_exists:
             self.report({'INFO'}, 'Order already applied for all objects')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         if not reordered:
             self.report({'WARNING'}, 'Failed! Did you create Shapekeys? Did you register the Objects?')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
-        return{'FINISHED'}
+        return {'FINISHED'}
 
 
 def isolate_shape_key(obj, sk_name):
@@ -417,7 +494,7 @@ def isolate_shape_key(obj, sk_name):
             sk.value = 0
 
 
-def _apply_mirror_modifier_to_mesh_with_shape_keys(context, obj, mod_name):
+def _apply_modifier_to_mesh_with_shape_keys(context, obj, mod_name):
     ''' Applies a modifier and keeps the shape keys
     @obj: the object with modifier and shape keys
     @mod_name: the name of the modifier
@@ -429,14 +506,15 @@ def _apply_mirror_modifier_to_mesh_with_shape_keys(context, obj, mod_name):
     dup_obj = futils.duplicate_obj(obj, link=True)
 
     # Remove all shape keys and apply mod on object.
-
+    if futils.get_object_mode_from_context_mode(context.mode) != 'OBJECT' and context.object != None:
+        bpy.ops.object.mode_set()
     futils.clear_object_selection()
     futils.set_active_object(obj.name)
 
     # obj.shape_key_clear()
     sk_utils.remove_all_sk_apply_basis(obj, apply_basis=True)
 
-    futils.apply_modifier(mod_name)
+    apply_modifier(mod_name)
 
     shape_data = {}
 
@@ -444,7 +522,6 @@ def _apply_mirror_modifier_to_mesh_with_shape_keys(context, obj, mod_name):
     dup_shape_keys = dup_obj.data.shape_keys.key_blocks
 
     relative_keys_dict = {}
-    # for sk in dup_shape_keys:
 
     for sk in dup_shape_keys:
 
@@ -484,23 +561,26 @@ def _apply_mirror_modifier_to_mesh_with_shape_keys(context, obj, mod_name):
         if temp_dup_obj:
 
             futils.clear_object_selection()
-            futils.set_active_object(temp_dup_obj.name)
+            futils.set_active_object(temp_dup_obj)
 
             isolate_shape_key(temp_dup_obj, sk_props['name'])
 
             sk_utils.apply_all_shape_keys(temp_dup_obj)
 
-            futils.apply_modifier(mod_name)
+            apply_modifier(mod_name)
 
             futils.set_active_object(obj.name)
             bpy.ops.object.join_shapes()
+            if not obj.data.shape_keys:
+                print("found no shape keys, wth")
+                continue
 
             new_sk = obj.data.shape_keys.key_blocks[-1]
             new_sk.name = sk_props['name']
-            new_sk.value = sk_props['value']
-            new_sk.mute = sk_props['mute']
             new_sk.slider_max = sk_props['slider_max']
             new_sk.slider_min = sk_props['slider_min']
+            new_sk.value = sk_props['value']
+            new_sk.mute = sk_props['mute']
             new_sk.vertex_group = sk_props['vertex_group']
             new_sk.interpolation = sk_props['interpolation']
 
@@ -532,7 +612,10 @@ def get_modifiers_on_object(self, context):
     if context is None:
         return mods
 
-    obj = context.object
+    if self.obj_name:
+        obj = context.scene.objects.get(self.obj_name)
+    else:
+        obj = context.object
     if obj:
         mod_names = []
         # for mod in obj.modifiers:
@@ -564,9 +647,22 @@ class FACEIT_OT_ApplyModifierObjectWithShapeKeys(bpy.types.Operator):
         description='Disables other modifiers during operation.',
         default=True
     )
+    obj_name: StringProperty(
+        name='Object Name',
+        default="",
+        description="The name of the object to apply the modifier on",
+        options={'HIDDEN', 'SKIP_SAVE'}
+    )
+    check_warnings: BoolProperty(
+        name="Check Warnings",
+        default=False,
+        options={'SKIP_SAVE'}
+    )
 
     @classmethod
     def poll(cls, context):
+        if context.scene.faceit_workspace.active_tab == 'SETUP':
+            return True
         if context.mode == 'OBJECT':
             obj = context.object
             if obj:
@@ -578,7 +674,10 @@ class FACEIT_OT_ApplyModifierObjectWithShapeKeys(bpy.types.Operator):
         return wm.invoke_props_dialog(self)
 
     def execute(self, context):
-        obj = context.object
+        if self.obj_name:
+            obj = context.scene.objects.get(self.obj_name)
+        else:
+            obj = context.object
         if not obj:
             self.report({'ERROR'}, 'Select an object')
             return {'CANCELLED'}
@@ -586,9 +685,7 @@ class FACEIT_OT_ApplyModifierObjectWithShapeKeys(bpy.types.Operator):
         mod_name = self.type
         if mod_name:
             if sk_utils.has_shape_keys(obj):
-
                 mod_dict = {}
-
                 if self.disable_other_mods:
                     for mod in obj.modifiers:
                         if mod.show_viewport:
@@ -597,14 +694,13 @@ class FACEIT_OT_ApplyModifierObjectWithShapeKeys(bpy.types.Operator):
                                 mod.show_viewport = False
 
                 if obj.modifiers.get(mod_name):
-                    _apply_mirror_modifier_to_mesh_with_shape_keys(context, obj, mod_name)
-
+                    _apply_modifier_to_mesh_with_shape_keys(context, obj, mod_name)
                 if mod_dict:
                     for mod, show in mod_dict.items():
                         mod = obj.modifiers.get(mod)
                         mod.show_viewport = show
-
             else:
-                futils.apply_modifier(mod_name)
-
+                apply_modifier(mod_name)
+        if self.check_warnings:
+            bpy.ops.faceit.face_object_warning_check('EXEC_DEFAULT', item_name='ALL')
         return {'FINISHED'}

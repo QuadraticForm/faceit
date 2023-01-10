@@ -2,6 +2,8 @@ import webbrowser
 
 import bpy
 
+from ..core.modifier_utils import get_modifiers_of_type
+
 from ..core import faceit_utils as futils
 from ..core import vgroup_utils as vg_utils
 
@@ -21,12 +23,12 @@ class FACEIT_OT_AddFacialPart(bpy.types.Operator):
     def poll(cls, context):
         obj = context.object
         if obj is not None:
-            return (obj.type == 'MESH') and \
+            return any([obj.type == 'MESH' for obj in context.selected_objects]) and \
                 (obj.name not in context.scene.faceit_face_objects or len(context.selected_objects) > 1)
 
     def execute(self, context):
         scene = context.scene
-        face_objects = scene.faceit_face_objects
+        faceit_objects = scene.faceit_face_objects
 
         # hidden object is not in selected objects, append context
         objects_add = list(filter(lambda x: x.type == 'MESH', context.selected_objects))
@@ -36,17 +38,32 @@ class FACEIT_OT_AddFacialPart(bpy.types.Operator):
 
         for obj in objects_add:
             # check if that item exists
-            obj_exists = any([obj.name == item.name for item in face_objects])
+            obj_exists = any([obj.name == item.name for item in faceit_objects])
             if not obj_exists:
-                item = face_objects.add()
+                item = faceit_objects.add()
                 item.name = obj.name
                 item.obj_pointer = obj
                 # check for warnings
-                bpy.ops.faceit.face_object_warning_check('INVOKE_DEFAULT', item_name=item.name, set_show_warnings=False)
+                # bpy.ops.faceit.face_object_warning_check('INVOKE_DEFAULT', item_name=item.name, set_show_warnings=False)
+            scene.faceit_face_index = faceit_objects.find(obj.name)
 
-            # set active index to new item
-            scene.faceit_face_index = face_objects.find(obj.name)
-
+        body_rig_counter = {}
+        # if not scene.faceit_body_armature:
+        if scene.faceit_body_armature is None:
+            for obj in futils.get_faceit_objects_list():
+                mods = get_modifiers_of_type(obj, 'ARMATURE')
+                for mod in mods:
+                    if mod.object is None:
+                        continue
+                    if mod.object not in body_rig_counter:
+                        body_rig_counter[mod.object] = 1
+                    else:
+                        body_rig_counter[mod.object] += 1
+                # set active index to new item
+            if body_rig_counter:
+                scene.faceit_body_armature = max(body_rig_counter, key=body_rig_counter.get)
+        # Find target shapes
+        bpy.ops.faceit.init_retargeting('EXEC_DEFAULT', quick_search=True)
         return {'FINISHED'}
 
 
@@ -76,11 +93,12 @@ class FACEIT_OT_SelectFacialPart(bpy.types.Operator):
         return self.execute(context)
 
     def execute(self, context):
-        scene = context.scene
         if self.clear_current_selection:
             futils.clear_object_selection()
-        futils.set_active_object(self.object_name)
-        scene.faceit_active_object = context.active_object.name
+        if self.object_name in context.scene.objects:
+            # obj = futils.get_object(self.object_name)
+            futils.set_active_object(self.object_name)
+
         return {'FINISHED'}
 
 
@@ -119,7 +137,7 @@ class FACEIT_OT_RemoveFacialPart(bpy.types.Operator):
     def execute(self, context):
 
         scene = context.scene
-        face_objects = scene.faceit_face_objects
+        faceit_objects = scene.faceit_face_objects
         face_index = scene.faceit_face_index
 
         def _remove_faceit_item(item):
@@ -132,19 +150,19 @@ class FACEIT_OT_RemoveFacialPart(bpy.types.Operator):
                 except AttributeError:
                     self.report({'INFO'}, 'No Vertex Groups found on Object.')
 
-            item_index = face_objects.find(item.name)
-            face_objects.remove(item_index)
+            item_index = faceit_objects.find(item.name)
+            faceit_objects.remove(item_index)
 
         # remove from face objects
-        if len(face_objects) > 0:
+        if len(faceit_objects) > 0:
             if self.remove_item:
-                item = face_objects[self.remove_item]
+                item = faceit_objects[self.remove_item]
             else:
-                item = face_objects[scene.faceit_face_index]
+                item = faceit_objects[scene.faceit_face_index]
 
             _remove_faceit_item(item)
 
-        obj_count = len(face_objects)
+        obj_count = len(faceit_objects)
 
         if face_index >= obj_count:
             scene.faceit_face_index = obj_count - 1
@@ -189,6 +207,7 @@ class FACEIT_OT_ClearFaceitObjects(bpy.types.Operator):
         scene.faceit_face_index = 0
         face_objects_list.clear()
         scene.faceit_workspace.active_tab = 'SETUP'
+        scene.faceit_body_armature = None
 
         return {'FINISHED'}
 
@@ -226,7 +245,7 @@ class FACEIT_OT_MoveFaceObject(bpy.types.Operator):
         faceit_objects.move(new_index, index)
         self.move_index(context, faceit_objects, index)
 
-        return{'FINISHED'}
+        return {'FINISHED'}
 
 
 class FACEIT_OT_GoToTab(bpy.types.Operator):

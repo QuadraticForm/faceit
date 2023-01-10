@@ -3,8 +3,9 @@ from pickle import TRUE
 import bpy
 from bpy.props import BoolProperty, EnumProperty
 
+from ..core.modifier_utils import get_faceit_armature_modifier
+
 from ..core import faceit_utils as futils
-from ..core import shape_key_utils
 from ..core import vgroup_utils as vg_utils
 from ..shape_keys.corrective_shape_keys_utils import (
     CORRECTIVE_SK_ACTION_NAME, clear_all_corrective_shape_keys)
@@ -106,7 +107,7 @@ class FACEIT_OT_CleanUpObjects(bpy.types.Operator):
                 op_objects = context.selected_objects
             else:
                 self.report({'WARNING'}, 'You need to select at least one object in this scope.')
-                return{'CANCELLED'}
+                return {'CANCELLED'}
 
         rig = futils.get_faceit_armature()
         deform_groups = vg_utils.get_deform_bones_from_armature(armature_obj=rig)
@@ -119,7 +120,7 @@ class FACEIT_OT_CleanUpObjects(bpy.types.Operator):
                 continue
 
             if self.remove_faceit_armature_modifier:
-                arm_mod = futils.get_faceit_armature_modifier(obj)
+                arm_mod = get_faceit_armature_modifier(obj)
                 if arm_mod:
                     obj.modifiers.remove(arm_mod)
 
@@ -142,7 +143,7 @@ class FACEIT_OT_CleanUpObjects(bpy.types.Operator):
         if self.remove_from_registration:
             scene.faceit_face_objects.clear()
 
-        return{'FINISHED'}
+        return {'FINISHED'}
 
 
 def update_purge_all(self, context):
@@ -348,4 +349,4 @@ class FACEIT_OT_CleanUpScene(bpy.types.Operator):
             for _ in range(12):
                 bpy.ops.outliner.orphans_purge()
 
-        return{'FINISHED'}
+        return {'FINISHED'}

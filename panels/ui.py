@@ -14,7 +14,7 @@ class FACEIT_PT_Base():
     # faceit_predecessor = ''
 
     faceit_predecessor = 'FACEIT_PT_MainPanel'
-    UI_TAB = 'SETUP'
+    UI_TABS = ('SETUP',)
     UI_WORKSPACES = ('ALL', 'RIG', 'MOCAP')
 
     @classmethod
@@ -22,7 +22,7 @@ class FACEIT_PT_Base():
         workspace = context.scene.faceit_workspace
         if workspace.workspace in cls.UI_WORKSPACES:
             pin_panel = bpy.context.scene.faceit_pin_panels
-            return workspace.active_tab == cls.UI_TAB or pin_panel.get_pin(
+            return workspace.active_tab in cls.UI_TABS or pin_panel.get_pin(
                 cls.bl_idname)
 
     def draw_header_preset(self, context):
@@ -30,15 +30,15 @@ class FACEIT_PT_Base():
 
         pin_panel = bpy.context.scene.faceit_pin_panels
         if pin_panel.get_pin(self.bl_idname):
-            if context.scene.faceit_workspace.active_tab != self.UI_TAB:
-                row.label(text=self.UI_TAB)
+            if context.scene.faceit_workspace.active_tab not in self.UI_TABS:
+                row.label(text=self.UI_TABS[0])
             icon = 'PINNED'
         else:
             icon = 'UNPINNED'
         row.prop(pin_panel, self.bl_idname, text='', emboss=False, icon=icon)
 
     def draw(self, context):
-        layout = self.layout
+        pass
 
 
 class FACEIT_PT_BaseSub():
@@ -89,13 +89,22 @@ class FACEIT_PT_MainPanel(bpy.types.Panel):
 
         rig = futils.get_faceit_armature()
 
-        if active_tab == 'CREATE':
+        if active_tab != 'SETUP':
             if not scene.faceit_face_objects:
                 col = layout.column()
                 row = col.row()
                 row.alert = True
                 op = row.operator('faceit.go_to_tab', text='Complete Setup first...')
                 op.tab = 'SETUP'
+                return
+
+        if active_tab in ('CONTROL', 'MOCAP'):
+            if not scene.faceit_arkit_retarget_shapes and not scene.faceit_arkit_retarget_shapes and not scene.faceit_control_armature:
+                col = layout.column()
+                row = col.row()
+                row.alert = True
+                op = row.operator('faceit.go_to_tab', text='No Targets Shapes found...')
+                op.tab = 'SHAPES'
                 return
 
         if active_tab == 'EXPRESSIONS':
@@ -105,3 +114,6 @@ class FACEIT_PT_MainPanel(bpy.types.Panel):
                 row.alert = True
                 op = row.operator('faceit.go_to_tab', text='Generate Rig First...')
                 op.tab = 'CREATE'
+        if futils.get_any_view_locked():
+            row = layout.row()
+            row.operator("faceit.unlock_3d_view", icon='LOCKED', depress=True)

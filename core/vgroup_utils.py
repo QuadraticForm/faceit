@@ -1,3 +1,4 @@
+from ..core.modifier_utils import get_faceit_armature_modifier
 from . import faceit_utils as futils
 
 
@@ -38,7 +39,10 @@ def remove_zero_weights_from_verts(obj, thresh=0.0) -> None:
     '''Clear weights from vertices where they are below the given threshold @thresh'''
     for v in obj.data.vertices:
         for grp_idx in (g.group for g in v.groups if g.weight <= thresh):
-            obj.vertex_groups[grp_idx].remove([v.index])
+            try:
+                obj.vertex_groups[grp_idx].remove([v.index])
+            except IndexError:
+                pass
 
 
 def get_vertex_groups_from_objects(objects=None) -> list:
@@ -150,7 +154,7 @@ def remove_all_weight(obj, vs=None, armature_obj=None):
     deform_groups = []
 
     if not armature_obj:
-        arm_mod = futils.get_faceit_armature_modifier(obj)
+        arm_mod = get_faceit_armature_modifier(obj)
         if arm_mod:
             armature_obj = arm_mod.object
 

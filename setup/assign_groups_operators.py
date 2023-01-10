@@ -47,7 +47,7 @@ class FACEIT_OT_AssignGroup(bpy.types.Operator):
 
         if len(context.selected_objects) > 1:
             self.report({'WARNING'}, 'It seems you have more than one object selected. Please select only one object.')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         mode_save = obj.mode
 
@@ -68,7 +68,7 @@ class FACEIT_OT_AssignGroup(bpy.types.Operator):
         if not v_selected:
             self.report({'ERROR'}, 'Select vertices')
             bpy.ops.object.mode_set(mode=mode_save)
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         # Get all faceit groups including eyelashes
         all_groups = fdata.get_list_faceit_groups()
@@ -126,12 +126,12 @@ class FACEIT_OT_AssignGroup(bpy.types.Operator):
 
         bpy.ops.object.mode_set(mode=mode_save)
 
-        self.report({'INFO'}, 'Assigned Vertex Group {} to the object {}.'.format(grp_name, obj.name))
-
         if warnings:
             self.report({'WARNING'}, 'Finished with Warnings. Please take a look at console output for more information.')
+        else:
+            self.report({'INFO'}, 'Assigned Vertex Group {} to the object {}.'.format(grp_name, obj.name))
 
-        return{'FINISHED'}
+        return {'FINISHED'}
 
 
 class FACEIT_OT_RemoveFaceitGroup(bpy.types.Operator):
@@ -268,28 +268,20 @@ class FACEIT_OT_SelectFaceitGroup(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        obj = context.active_object
-        if obj is not None:
-            if obj.type == 'MESH' and obj.name in context.scene.faceit_face_objects:
-                return (context.mode in ('EDIT_MESH', 'OBJECT'))
+        return True
 
     def execute(self, context):
 
         scene = context.scene
-
         if context.mode != 'OBJECT':
             bpy.ops.object.mode_set()
-
+        scene.faceit_face_index = self.object_list_index
         obj = futils.get_object(scene.faceit_face_objects[self.object_list_index].name)
-
-        futils.clear_object_selection()
-        futils.set_active_object(obj)
 
         vs = vg_utils.get_verts_in_vgroup(obj, self.faceit_vertex_group_name)
 
         mesh_utils.unselect_flush_vert_selection(obj)
         mesh_utils.select_vertices(obj, vs, flush_selection=True)
-
         bpy.ops.object.mode_set(mode='EDIT')
 
         return {'FINISHED'}

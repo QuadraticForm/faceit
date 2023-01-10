@@ -1,51 +1,22 @@
 import bpy
-from addon_utils import check
-from bpy.types import Panel
 
-from . import draw_utils
-# from . import retarget_fbx_ui
+from .draw_utils import draw_head_targets_layout
 from .ui import FACEIT_PT_Base, FACEIT_PT_BaseSub
+from ..mocap.osc_receiver import osc_queue
+from ..panels.draw_utils import draw_text_block
+from ..ctrl_rig.control_rig_utils import is_control_rig_connected
 
 
 class FACEIT_PT_BaseMocap(FACEIT_PT_Base):
-    UI_TAB = 'MOCAP'
-
-
-class FACEIT_PT_MocapSettings(FACEIT_PT_BaseMocap, bpy.types.Panel):
-    bl_label = 'Settings'
-    bl_idname = 'FACEIT_PT_MocapSettings'
-
-    @classmethod
-    def poll(cls, context):
-        return super().poll(context)
+    UI_TABS = ('MOCAP',)
 
 
 class FACEIT_PT_MocapUtils(FACEIT_PT_BaseMocap, bpy.types.Panel):
-    bl_label = 'Utilities'
+    bl_label = 'Other Tools and Utilities'
     bl_idname = 'FACEIT_PT_MocapUtils'
     # bl_parent_id = 'FACEIT_PT_MocapSettings'
     # bl_options = set()
-    faceit_predecessor = 'FACEIT_PT_MocapSettings'
-
-    @classmethod
-    def poll(cls, context):
-        return super().poll(context)
-
-    def draw(self, context):
-        layout = self.layout
-        box = layout.box()
-        col = box.column(align=True)
-        row = col.row()
-        row.operator('faceit.add_zero_keyframe', icon='KEYFRAME')
-        row = col.row()
-        row.operator('faceit.remove_frame_range', icon='KEYFRAME')
-
-
-class FACEIT_PT_MocapAction(FACEIT_PT_BaseSub, bpy.types.Panel):
-    bl_label = 'Action'
-    bl_idname = 'FACEIT_PT_MocapAction'
-    bl_parent_id = 'FACEIT_PT_MocapSettings'
-    # bl_options = set()
+    faceit_predecessor = 'FACEIT_PT_MocapOSC'
 
     @classmethod
     def poll(cls, context):
@@ -54,39 +25,32 @@ class FACEIT_PT_MocapAction(FACEIT_PT_BaseSub, bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         scene = context.scene
-
-        # col = layout.column(align=True)
-        box = layout.box()
-        col = box.column(align=True)
-        # box = col_mocap.box()
-
-        # row = box.row()
-        # draw_utils.draw_panel_dropdown_expander(row, scene, 'faceit_mocap_general_expand_ui', 'Mocap Settings')
-        # draw_utils.draw_web_link(row, 'https://faceit-doc.readthedocs.io/en/latest/arkit_setup/#general-mocap-settings')
-
-        # if scene.faceit_mocap_general_expand_ui:
-
-        # box_action = col.box()
-        # col = box_action.column(align=True)
-        # row = col.row(align=True)
-
-        # draw_utils.draw_panel_dropdown_expander(row, scene, 'faceit_mocap_action_expand_ui', 'Action')
-        # if scene.faceit_mocap_action_expand_ui:
-        # row = col.row(align=True)
-        # row.label(text='Activate Action')
-
-        row = col.row(align=True)
-        row.prop(scene, 'faceit_mocap_action', text='')
-        op = row.operator('faceit.populate_action', icon='ACTION_TWEAK')
-        row = col.row(align=True)
-        row.operator('faceit.new_action', icon='ADD')
+        row = layout.row(align=True)
+        row.operator("faceit.reset_expression_values", icon='LOOP_BACK')
+        if scene.faceit_head_target_object:
+            row.operator("faceit.reset_head_pose", icon='LOOP_BACK')
 
 
-class FACEIT_PT_MocapMotionTypes(FACEIT_PT_BaseSub, bpy.types.Panel):
-    bl_label = 'Motion Types'
-    bl_idname = 'FACEIT_PT_MocapMotionTypes'
-    bl_parent_id = 'FACEIT_PT_MocapSettings'
-    # bl_options = set()
+class FACEIT_PT_MocapKeyframesOps(FACEIT_PT_BaseSub, bpy.types.Panel):
+    bl_label = 'Manipulate Keyframes'
+    bl_idname = 'FACEIT_PT_MocapKeyframesOps'
+    bl_parent_id = 'FACEIT_PT_MocapUtils'
+    faceit_predecessor = 'FACEIT_PT_MocapMotionTargets'
+
+    def draw(self, context):
+        layout = self.layout
+        # box = layout.box()
+        col = layout.column(align=True)
+        row = col.row()
+        row.operator('faceit.add_zero_keyframe', icon='KEYFRAME')
+        row = col.row()
+        row.operator('faceit.remove_frame_range', icon='KEYFRAME')
+
+
+class FACEIT_PT_MocapMotionTargets(FACEIT_PT_BaseSub, bpy.types.Panel):
+    bl_label = 'Head Setup'
+    bl_idname = 'FACEIT_PT_MocapMotionTargets'
+    bl_parent_id = 'FACEIT_PT_MocapUtils'
     faceit_predecessor = 'FACEIT_PT_MocapAction'
 
     @classmethod
@@ -96,336 +60,74 @@ class FACEIT_PT_MocapMotionTypes(FACEIT_PT_BaseSub, bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         scene = context.scene
+        layout.use_property_split = True
+        layout.use_property_decorate = False  # No animation.
+        col = layout.column()
+        draw_head_targets_layout(col, scene=scene)
 
-        # col = layout.column(align=True)
-        box = layout.box()
-        col = box.column(align=True)
-        # box_targets = col.box()
-        # col = box_targets.column(align=True)
-        # row = col.row()
 
-        motion_types_setup = scene.faceit_mocap_motion_types
-        # draw_utils.draw_panel_dropdown_expander(
-        #     row, motion_types_setup, 'expand', 'Motion Types (Experimental)')
-        # if motion_types_setup.expand:
-        # row = col.row(align=True)
-        # row.label(text='Choose Motion Types')
+class FACEIT_PT_MocapAction(FACEIT_PT_BaseSub, bpy.types.Panel):
+    bl_label = 'Active Action'
+    bl_idname = 'FACEIT_PT_MocapAction'
+    bl_parent_id = 'FACEIT_PT_MocapUtils'
+    # faceit_predecessor = 'FACEIT_PT_RetargetFBX'
+    # bl_options = set()
+
+    @classmethod
+    def poll(cls, context):
+        return super().poll(context)
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+        col = layout.grid_flow(row_major=True, columns=2, even_columns=True, even_rows=True, align=True)
         row = col.row(align=True)
-        row.prop(motion_types_setup, 'blendshapes_target', icon='SHAPEKEY_DATA')
+        row.prop(scene, 'faceit_mocap_action', text='')
+        mocap_action = scene.faceit_mocap_action
         row = col.row(align=True)
-        row.prop(motion_types_setup, 'head_target_rotation', icon='CON_ROTLIKE')
-        row.prop(motion_types_setup, 'eye_target_rotation', icon='CON_ROTLIKE')
-        # row.prop(motion_types_setup, 'head_target_location', icon='ORIENTATION_VIEW')
+        if mocap_action:
+            row.prop(mocap_action, "use_fake_user", text="", icon='FAKE_USER_OFF')
+        row.operator('faceit.new_action', icon='ADD')
 
-        if motion_types_setup.head_target_rotation:
-
-            col.separator()
-
+        head_obj = scene.faceit_head_target_object
+        if head_obj:
             row = col.row(align=True)
-            op = row.operator('faceit.face_cap_empty', text='Create Head Target')
-            op.face_cap_empty = 'HEAD'
+            row.prop(scene, "faceit_head_action", text="")
             row = col.row(align=True)
-            row.prop_search(scene, 'faceit_mocap_target_head', bpy.data, 'objects', text='')
-            op_populate = row.operator('faceit.populate_face_cap_empty', text='', icon='EYEDROPPER')
-            op_populate.face_cap_empty = 'HEAD'
-            obj = scene.objects.get(scene.faceit_mocap_target_head)
-            if obj:
+            head_action = scene.faceit_head_action
+            if head_action:
+                row.prop(head_action, "use_fake_user", text="", icon='FAKE_USER_OFF')
+            row.operator('faceit.new_head_action', icon='ADD')
+        ctrl_rig = scene.faceit_control_armature
+        if ctrl_rig:
+            row = col.row(align=True)
+            if ctrl_rig.animation_data:
+                row.prop(ctrl_rig.animation_data, 'action', text='')
+                mocap_action = ctrl_rig.animation_data.action
                 row = col.row(align=True)
-                row.popover('FACEIT_PT_DeltaTransformHead')
-
-        if motion_types_setup.eye_target_rotation:
-
-            col.separator()
-
-            row = col.row(align=True)
-            op = row.operator('faceit.face_cap_empty', text='Create Eye Targets')
-            op.face_cap_empty = 'EYES'
-            row = col.row(align=True)
-            row.prop_search(scene, 'faceit_mocap_target_eye_l', bpy.data, 'objects', text='')
-            op_populate = row.operator('faceit.populate_face_cap_empty', text='', icon='EYEDROPPER')
-            op_populate.face_cap_empty = 'EYE_L'
-
-            row.prop_search(scene, 'faceit_mocap_target_eye_r', bpy.data, 'objects', text='')
-            op_populate = row.operator('faceit.populate_face_cap_empty', text='', icon='EYEDROPPER')
-            op_populate.face_cap_empty = 'EYE_R'
-            obj = scene.objects.get(
-                scene.faceit_mocap_target_eye_r) or scene.objects.get(
-                scene.faceit_mocap_target_eye_l)
-            if obj:
-                row = col.row(align=True)
-                row.popover('FACEIT_PT_DeltaTransformEyeLeft')
-                row.popover('FACEIT_PT_DeltaTransformEyeRight')
-
-
-class FACEIT_PT_MocapFaceCap(FACEIT_PT_BaseMocap, bpy.types.Panel):
-    bl_label = 'Face Cap'
-    bl_idname = 'FACEIT_PT_MocapFaceCap'
-    # bl_options = set()
-    # bl_parent_id = 'FACEIT_PT_MainPanel'
-    faceit_predecessor = 'FACEIT_PT_RetargetFBX'
-
-    @classmethod
-    def poll(cls, context):
-        return super().poll(context)
-
-
-class FACEIT_PT_FaceCapLive(FACEIT_PT_BaseSub, bpy.types.Panel):
-    bl_label = 'Live Mode'
-    bl_idname = 'FACEIT_PT_FaceCapLive'
-    bl_parent_id = 'FACEIT_PT_MocapFaceCap'
-    # bl_options = set()
-
-    @classmethod
-    def poll(cls, context):
-        return super().poll(context)
-
-    def draw(self, context):
-        layout = self.layout
-        scene = context.scene
-
-        # col = layout.column(align=True)
-        box = layout.box()
-        col = box.column(align=True)
-        row = col.row()
-
-        # draw_utils.draw_web_link(
-        #     row, 'https://faceit-doc.readthedocs.io/en/latest/face_cap_utils/#live-capturing-osc')
-
-        if check(module_name="AddRoutes")[1]:
-            row = col.row(align=True)
-            row.operator('faceit.add_routes')
-            row = col.row(align=True)
-            row.operator('faceit.clear_routes')
-            if not scene.MOM_Items:
-                row.enabled = False
-
-            row = col.row(align=True)
-            row.prop(scene, 'faceit_record_face_cap', text='Record', icon='REC')
-            if not scene.MOM_Items:
-                row.enabled = False
-        else:
-            row = col.row(align=True)
-            draw_utils.draw_web_link(
-                row,
-                'https://faceit-doc.readthedocs.io/en/latest/face_cap_utils/#addroutes-add-on',
-                text_ui='Install AddRoutes First...', show_always=True)
-
-
-class FACEIT_PT_FaceCapText(FACEIT_PT_BaseSub, bpy.types.Panel):
-    bl_label = 'Import TXT'
-    bl_idname = 'FACEIT_PT_FaceCapText'
-    bl_parent_id = 'FACEIT_PT_MocapFaceCap'
-    # bl_options = set()
-    faceit_predecessor = 'FACEIT_PT_FaceCapLive'
-
-    @classmethod
-    def poll(cls, context):
-        return super().poll(context)
-
-    def draw(self, context):
-        layout = self.layout
-        scene = context.scene
-
-        # col = layout.column(align=False)
-        box = layout.box()
-        col = box.column(align=True)
-
-        face_cap_mocap_settings = scene.faceit_face_cap_mocap_settings
-
-        row = col.row(align=True)
-        row.prop(face_cap_mocap_settings, 'audio_filename', text='')
-        row.operator('faceit.load_audio_file', icon='FILE_FOLDER').engine = 'FACECAP'
-        row.operator('faceit.clear_audio_file', text='', icon='X').engine = 'FACECAP'
-        row = col.row(align=True)
-        row.prop(face_cap_mocap_settings, 'filename', text='')
-        row.operator('faceit.load_motion_file', text='Load FaceCap TXT', icon='FILE_FOLDER').engine = 'FACECAP'
-        row.operator('faceit.clear_motion_file', text='', icon='X').engine = 'FACECAP'
-        row = col.row(align=True)
-        row.operator_context = 'INVOKE_DEFAULT'
-
-        op = row.operator('faceit.import_mocap', icon='IMPORT')
-        op.engine = 'FACECAP'
-        row.enabled = (face_cap_mocap_settings.filename != '')
-
-        # row = col.row(align=True)
-        # row.label(text='Audio (Optional)')
-
-
-class FACEIT_PT_MocapEpic(FACEIT_PT_BaseMocap, bpy.types.Panel):
-    bl_label = 'Live Link Face'
-    bl_idname = 'FACEIT_PT_MocapEpic'
-    # bl_options = set()
-    faceit_predecessor = 'FACEIT_PT_MocapFaceCap'
-
-    @classmethod
-    def poll(cls, context):
-        return super().poll(context)
-
-
-class FACEIT_PT_MocapCsv(FACEIT_PT_BaseSub, bpy.types.Panel):
-    bl_label = 'Import CSV'
-    bl_idname = 'FACEIT_PT_MocapCsv'
-    bl_parent_id = 'FACEIT_PT_MocapEpic'
-    # bl_options = set()
-    faceit_predecessor = 'FACEIT_PT_MocapFaceCap'
-
-    @classmethod
-    def poll(cls, context):
-        return super().poll(context)
-
-    def draw(self, context):
-        layout = self.layout
-        scene = context.scene
-
-        # col = layout.column(align=False)
-        box = layout.box()
-        col = box.column(align=True)
-
-        ue_mocap_settings = scene.faceit_epic_mocap_settings
-        # draw_utils.draw_web_link(row, 'https://faceit-doc.readthedocs.io/en/latest/epic_utils/')
-        row = col.row(align=True)
-        row.prop(ue_mocap_settings, 'audio_filename', text='')
-        row.operator('faceit.load_audio_file', icon='FILE_FOLDER').engine = 'EPIC'
-        row.operator('faceit.clear_audio_file', text='', icon='X').engine = 'EPIC'
-        row = col.row(align=True)
-        row.prop(ue_mocap_settings, 'filename', text='')
-        row.operator('faceit.load_motion_file', text='Load UE4 CSV', icon='FILE_FOLDER').engine = 'EPIC'
-        row.operator('faceit.clear_motion_file', text='', icon='X').engine = 'EPIC'
-        row = col.row(align=True)
-        row.operator_context = 'INVOKE_DEFAULT'
-
-        op = row.operator('faceit.import_mocap', icon='IMPORT')
-        op.engine = 'EPIC'
-
-        row.enabled = (ue_mocap_settings.filename != '')
-
-
-class FACEIT_PT_Deltas():
-    bl_label = "Deltas"
-    bl_space_type = 'VIEW_3D'
-    bl_region_type = 'WINDOW'
-
-
-class FACEIT_PT_DeltaTransformHead(FACEIT_PT_Deltas, Panel):
-    bl_label = "Delta Transformation Head"
-
-    @classmethod
-    def poll(cls, context):
-        return (context.scene.faceit_mocap_target_head is not None)
-
-    def draw(self, context):
-        layout = self.layout
-        layout.use_property_split = True
-        scene = context.scene
-
-        ob = scene.objects.get(scene.faceit_mocap_target_head)
-
-        col = layout.column()
-        # col.prop(ob, 'name')
-        col.prop(ob, "delta_location", text="Location")
-
-        rotation_mode = ob.rotation_mode
-        if rotation_mode == 'QUATERNION':
-            col.prop(ob, "delta_rotation_quaternion", text="Rotation")
-        elif rotation_mode == 'AXIS_ANGLE':
-            pass
-        else:
-            col.prop(ob, "delta_rotation_euler", text="Rotation")
-
-
-class FACEIT_PT_DeltaTransformEyeLeft(FACEIT_PT_Deltas, Panel):
-    bl_label = "Delta Transformation Eye Left"
-
-    @classmethod
-    def poll(cls, context):
-        return (context.scene.faceit_mocap_target_head is not None)
-
-    def draw(self, context):
-        layout = self.layout
-        layout.use_property_split = True
-        scene = context.scene
-
-        ob = scene.objects.get(scene.faceit_mocap_target_eye_l)
-
-        col = layout.column()
-        # col.prop(ob, 'name')
-        col.prop(ob, "delta_location", text="Location")
-
-        rotation_mode = ob.rotation_mode
-        if rotation_mode == 'QUATERNION':
-            col.prop(ob, "delta_rotation_quaternion", text="Rotation")
-        elif rotation_mode == 'AXIS_ANGLE':
-            pass
-        else:
-            col.prop(ob, "delta_rotation_euler", text="Rotation")
-
-
-class FACEIT_PT_DeltaTransformEyeRight(FACEIT_PT_Deltas, Panel):
-    bl_label = "Delta Transformation Eye Right"
-
-    @classmethod
-    def poll(cls, context):
-        return (context.scene.faceit_mocap_target_head is not None)
-
-    def draw(self, context):
-        layout = self.layout
-        layout.use_property_split = True
-        scene = context.scene
-
-        ob = scene.objects.get(scene.faceit_mocap_target_eye_r)
-
-        col = layout.column()
-        # col.prop(ob, 'name')
-        col.prop(ob, "delta_location", text="Location")
-
-        rotation_mode = ob.rotation_mode
-        if rotation_mode == 'QUATERNION':
-            col.prop(ob, "delta_rotation_quaternion", text="Rotation")
-        elif rotation_mode == 'AXIS_ANGLE':
-            pass
-        else:
-            col.prop(ob, "delta_rotation_euler", text="Rotation")
-
-
-class SHAPE_AMPLIFY_MOCAP_UL_list(bpy.types.UIList):
-    def draw_item(self, context, layout, data, item, icon, active_data, active_propname):
-
-        if self.layout_type in {'DEFAULT', 'COMPACT'}:
-
-            row = layout.row(align=True)
-
-            if item.use_animation is True:
-                icon = 'CHECKBOX_HLT'
+                if mocap_action:
+                    row.prop(mocap_action, "use_fake_user", text="", icon='FAKE_USER_OFF')
+                # row.prop_search(head_obj.animation_data,
+                #                 'action', bpy.data, 'actions', text="")
+                row.operator('faceit.new_ctrl_rig_action', text="New Ctrl Rig Action", icon='ADD')
             else:
-                icon = 'CHECKBOX_DEHLT'
-
-            row.prop(item, 'use_animation', text='', expand=False, icon=icon)
-
-            target_shapes = item.target_shapes
-            row.active = expression_enabled = item.use_animation and len(target_shapes) > 0
-
-            if expression_enabled:
-                row.prop(item, 'amplify', emboss=True, text=item.name)
-            else:
-                row.prop(item, 'amplify', emboss=False, text=item.name)
+                row.operator('faceit.new_ctrl_rig_action', text="Create Ctrl Rig Action", icon='ADD')
 
 
-class FACEIT_PT_MocapA2F(FACEIT_PT_BaseMocap, bpy.types.Panel):
+class FACEIT_PT_MocapImporters(FACEIT_PT_BaseMocap, bpy.types.Panel):
+    bl_label = 'Import (Recorded)'
+    bl_idname = 'FACEIT_PT_MocapImporters'
+    # faceit_predecessor = 'FACEIT_PT_MocapUtils'
+
+    @classmethod
+    def poll(cls, context):
+        return super().poll(context)
+
+
+class FACEIT_PT_MocapA2F(FACEIT_PT_BaseSub, bpy.types.Panel):
     bl_label = 'Audio2Face'
     bl_idname = 'FACEIT_PT_MocapA2F'
-    # bl_options = set()
-    faceit_predecessor = 'FACEIT_PT_MocapEpic'
-
-    @classmethod
-    def poll(cls, context):
-        return super().poll(context)
-
-
-class FACEIT_PT_MocapJson(FACEIT_PT_BaseSub, bpy.types.Panel):
-    bl_label = 'Import Json'
-    bl_idname = 'FACEIT_PT_MocapJson'
-    bl_parent_id = 'FACEIT_PT_MocapA2F'
-    # bl_options = set()
+    bl_parent_id = 'FACEIT_PT_MocapImporters'
     faceit_predecessor = 'FACEIT_PT_MocapEpic'
 
     @classmethod
@@ -436,9 +138,7 @@ class FACEIT_PT_MocapJson(FACEIT_PT_BaseSub, bpy.types.Panel):
         layout = self.layout
         scene = context.scene
 
-        # col = layout.column(align=False)
-        box = layout.box()
-        col = box.column(align=True)
+        col = layout.column(align=True)
 
         a2f_mocap_settings = scene.faceit_a2f_mocap_settings
         # draw_utils.draw_web_link(row, 'https://faceit-doc.readthedocs.io/en/latest/epic_utils/')
@@ -455,7 +155,203 @@ class FACEIT_PT_MocapJson(FACEIT_PT_BaseSub, bpy.types.Panel):
         row = col.row(align=True)
         row.operator_context = 'INVOKE_DEFAULT'
 
-        op = row.operator('faceit.import_mocap', icon='IMPORT')
-        op.engine = 'A2F'
-
+        row.operator('faceit.import_a2f_mocap', icon='IMPORT')
         row.enabled = (a2f_mocap_settings.filename != '')
+
+
+class FACEIT_PT_MocapFaceCap(FACEIT_PT_BaseSub, bpy.types.Panel):
+    bl_label = 'Face Cap'
+    bl_idname = 'FACEIT_PT_MocapFaceCap'
+    bl_parent_id = 'FACEIT_PT_MocapImporters'
+    # faceit_predecessor = 'FACEIT_PT_MocapImporters'
+
+    @classmethod
+    def poll(cls, context):
+        return super().poll(context)
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+
+        col = layout.column(align=True)
+
+        face_cap_mocap_settings = scene.faceit_face_cap_mocap_settings
+
+        row = col.row(align=True)
+        row.prop(face_cap_mocap_settings, 'audio_filename', text='')
+        row.operator('faceit.load_audio_file', icon='FILE_FOLDER').engine = 'FACECAP'
+        row.operator('faceit.clear_audio_file', text='', icon='X').engine = 'FACECAP'
+        row = col.row(align=True)
+        row.prop(face_cap_mocap_settings, 'filename', text='')
+        row.operator('faceit.load_motion_file', text='Load FaceCap TXT', icon='FILE_FOLDER').engine = 'FACECAP'
+        row.operator('faceit.clear_motion_file', text='', icon='X').engine = 'FACECAP'
+        row = col.row(align=True)
+        row.operator_context = 'INVOKE_DEFAULT'
+
+        row.operator('faceit.import_face_cap_mocap', icon='IMPORT')
+        row.enabled = (face_cap_mocap_settings.filename != '')
+
+
+class FACEIT_PT_MocapEpic(FACEIT_PT_BaseSub, bpy.types.Panel):
+    bl_label = 'Live Link Face'
+    bl_idname = 'FACEIT_PT_MocapEpic'
+    bl_parent_id = 'FACEIT_PT_MocapImporters'
+    faceit_predecessor = 'FACEIT_PT_MocapFaceCap'
+
+    @classmethod
+    def poll(cls, context):
+        return super().poll(context)
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+
+        col = layout.column(align=True)
+
+        ue_mocap_settings = scene.faceit_epic_mocap_settings
+        # draw_utils.draw_web_link(row, 'https://faceit-doc.readthedocs.io/en/latest/epic_utils/')
+        row = col.row(align=True)
+        row.prop(ue_mocap_settings, 'audio_filename', text='')
+        row.operator('faceit.load_audio_file', icon='FILE_FOLDER').engine = 'EPIC'
+        row.operator('faceit.clear_audio_file', text='', icon='X').engine = 'EPIC'
+        row = col.row(align=True)
+        row.prop(ue_mocap_settings, 'filename', text='')
+        row.operator('faceit.load_motion_file', text='Load UE4 CSV', icon='FILE_FOLDER').engine = 'EPIC'
+        row.operator('faceit.clear_motion_file', text='', icon='X').engine = 'EPIC'
+        row = col.row(align=True)
+        row.operator_context = 'INVOKE_DEFAULT'
+
+        row.operator('faceit.import_epic_mocap', icon='IMPORT')
+        row.enabled = (ue_mocap_settings.filename != '')
+
+
+class FACEIT_PT_MocapOSC(FACEIT_PT_BaseMocap, bpy.types.Panel):
+    bl_label = 'OSC (Live)'
+    bl_idname = 'FACEIT_PT_MocapOSC'
+    faceit_predecessor = 'FACEIT_PT_MocapImporters'
+
+    @classmethod
+    def poll(cls, context):
+        return super().poll(context)
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+
+        recorded_data_found = bool(osc_queue)
+        receiver_enabled = scene.faceit_osc_receiver_enabled
+        col = layout.column(align=True)
+        col.use_property_split = True
+        col.use_property_decorate = False
+        row = col.row(align=True)
+        row.prop(scene, 'faceit_osc_address')
+        row = col.row(align=True)
+        row.prop(scene, 'faceit_osc_port')
+        col.separator()
+        row = col.row(align=True)
+        row.prop(scene, 'faceit_osc_rotation_units')
+
+        col.separator(factor=2)
+
+        col = layout.column(align=True)
+        row = col.row(align=True)
+        if not receiver_enabled:
+            row.operator("faceit.receiver_start", icon='PLAY')
+            row.enabled = not recorded_data_found
+        else:
+            row.operator("faceit.receiver_stop", icon='PAUSE')
+
+        if osc_queue and not receiver_enabled:
+            row = col.row(align=True)
+            row.operator("faceit.import_live_mocap", icon='IMPORT')
+            # op.animate_head_rotation = scene.faceit_osc_animate_head_rotation
+            # op.animate_head_location = scene.faceit_osc_animate_head_location
+            # op.animate_shapes = scene.faceit_osc_animate_shapes
+
+            row.operator("faceit.clear_live_data", icon='X')
+
+        col.separator()
+
+        recorder_settings_box = col.box()
+        recorder_settings_box.enabled = not (recorded_data_found or receiver_enabled)
+        col = recorder_settings_box.column(align=True)
+        col.use_property_split = False
+        col.use_property_decorate = False
+
+        animate_loc = scene.faceit_osc_animate_head_location
+        animate_rot = scene.faceit_osc_animate_head_rotation
+        animate_shapes = scene.faceit_osc_animate_shapes
+
+        row = col.row(align=True)
+        row.label(text="Shapes Animation")
+        row = col.row(align=True)
+        row.prop(scene, "faceit_osc_animate_shapes", icon="BLANK1")
+
+        if animate_shapes:
+            # TODO: check if the control rig is connected.
+            # draw_text_block(col, text="Disconnect the Ctrl Rig for Live Preview of animations.")
+            row = col.row(align=True)
+            if scene.faceit_osc_use_region_filter:
+                icon = 'TRIA_DOWN'
+            else:
+                icon = 'TRIA_RIGHT'
+            row.prop(scene, "faceit_osc_use_region_filter", icon=icon)
+            if scene.faceit_osc_use_region_filter:
+                # col.use_property_split = False
+                face_regions = scene.faceit_osc_face_regions
+                row = col.row(align=True)
+                icon_value = 'HIDE_OFF' if face_regions.brows else 'HIDE_ON'
+                row.prop(face_regions, 'brows', icon=icon_value)
+                icon_value = 'HIDE_OFF' if face_regions.eyes else 'HIDE_ON'
+                row.prop(face_regions, 'eyes', icon=icon_value)
+                row = col.row(align=True)
+                icon_value = 'HIDE_OFF' if face_regions.cheeks else 'HIDE_ON'
+                row.prop(face_regions, 'cheeks', icon=icon_value)
+                icon_value = 'HIDE_OFF' if face_regions.nose else 'HIDE_ON'
+                row.prop(face_regions, 'nose', icon=icon_value)
+                row = col.row(align=True)
+                icon_value = 'HIDE_OFF' if face_regions.mouth else 'HIDE_ON'
+                row.prop(face_regions, 'mouth', icon=icon_value)
+                icon_value = 'HIDE_OFF' if face_regions.tongue else 'HIDE_ON'
+                row.prop(face_regions, 'tongue', icon=icon_value)
+                # row = col.row(align=True)
+                # icon_value = 'HIDE_OFF' if face_regions.other else 'HIDE_ON'
+                # row.prop(face_regions, 'other', icon=icon_value)
+        # HEAD
+        row = col.row(align=True)
+        row.label(text="Head Animation")
+        row = col.row(align=True)
+        row.prop(scene, 'faceit_osc_animate_head_rotation', icon="BLANK1")
+        row.prop(scene, 'faceit_osc_animate_head_location', icon="BLANK1")
+        col = col.column(align=True)
+        col.use_property_split = True
+        if animate_loc or animate_rot:
+            draw_head_targets_layout(col, scene=scene)
+
+            # row = col.row()
+        if animate_loc:
+            col.separator()
+            row = col.row(align=True)
+            row.prop(scene, "faceit_osc_head_location_multiplier")
+            # row = col.row(align=True)
+            if scene.faceit_head_target_object:
+                if scene.faceit_head_target_object.type != 'ARMATURE':
+                    # if scene.faceit_head_sub_target
+                    row.prop(scene, "faceit_use_head_location_offset", icon='TRANSFORM_ORIGINS')
+
+        if not (animate_loc or animate_rot or animate_shapes):
+            row = col.row()
+            row.label(text="WARNING! Enable at least one type of motion")
+
+        ctrl_rig = scene.faceit_control_armature
+        if ctrl_rig:
+            col.use_property_split = False
+            if is_control_rig_connected(ctrl_rig):
+                if not scene.faceit_auto_disconnect_ctrl_rig:
+                    row = col.row(align=True)
+                    row.label(text="Control Rig")
+                    draw_text_block(col, text="Live Preview is disabled while the control rig is connected.",
+                                    heading="WARNING", chars_per_row=100)
+                col.separator()
+                row = col.row(align=True)
+                row.prop(scene, "faceit_auto_disconnect_ctrl_rig", icon='UNLINKED')
