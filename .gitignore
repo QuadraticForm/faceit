@@ -1,2 +1,4 @@
 
 mocap/__pycache__/
+
+*.pyc
