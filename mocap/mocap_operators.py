@@ -79,6 +79,19 @@ class FACEIT_OT_ImportEpicMocap(MocapImporterBase, bpy.types.Operator):
     def _get_mocap_importer(self):
         return EpicMocapImporter()
 
+# xx @ NID, add 30fps option
+class FACEIT_OT_ImportEpicMocap30FPS(MocapImporterBase, bpy.types.Operator):
+    bl_idname = 'faceit.import_epic_mocap_30fps'
+    bl_label = 'Import CSV 30fps'
+    engine_settings_prop_name = "faceit_epic_mocap_settings"
+    target_shapes_prop_name = "faceit_arkit_retarget_shapes"
+    engine_settings = None
+    record_frame_rate = 1 / 30
+    can_import_head_location = False
+
+    def _get_mocap_importer(self):
+        return EpicMocapImporter()
+
 
 class FACEIT_OT_ImportA2FMocap(MocapImporterBase, bpy.types.Operator):
     bl_idname = 'faceit.import_a2f_mocap'

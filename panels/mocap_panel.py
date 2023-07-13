@@ -222,6 +222,8 @@ class FACEIT_PT_MocapEpic(FACEIT_PT_BaseSub, bpy.types.Panel):
         row.operator_context = 'INVOKE_DEFAULT'
 
         row.operator('faceit.import_epic_mocap', icon='IMPORT')
+        # xx @ NID, 30fps
+        row.operator('faceit.import_epic_mocap_30fps', icon='IMPORT')
         row.enabled = (ue_mocap_settings.filename != '')
 
 
