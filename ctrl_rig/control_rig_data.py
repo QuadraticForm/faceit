@@ -211,6 +211,10 @@ def get_control_rig_driver_dict(control_rig):
         driver_dict.update(get_eye_2d_driver_dict(control_rig))
     if ctrl_rig_version > 1.5:
         driver_dict.update(update_drivers_1_6())
+    # NID, special case for NID
+    # we made the same change to nose sneer as official version, so lets just use it
+    if ctrl_rig_version == 1.21:
+        driver_dict.update(update_drivers_1_6())
     return driver_dict
 
 
