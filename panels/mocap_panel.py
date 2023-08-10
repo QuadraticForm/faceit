@@ -1,5 +1,7 @@
 import bpy
 
+from ..core.faceit_data import get_engine_settings
+
 from .draw_utils import draw_head_targets_layout
 from .ui import FACEIT_PT_Base, FACEIT_PT_BaseSub
 from ..mocap.osc_receiver import osc_queue
@@ -140,7 +142,7 @@ class FACEIT_PT_MocapA2F(FACEIT_PT_BaseSub, bpy.types.Panel):
 
         col = layout.column(align=True)
 
-        a2f_mocap_settings = scene.faceit_a2f_mocap_settings
+        a2f_mocap_settings = scene.faceit_live_mocap_settings.get('A2F')
         # draw_utils.draw_web_link(row, 'https://faceit-doc.readthedocs.io/en/latest/epic_utils/')
 
         row = col.row(align=True)
@@ -175,7 +177,7 @@ class FACEIT_PT_MocapFaceCap(FACEIT_PT_BaseSub, bpy.types.Panel):
 
         col = layout.column(align=True)
 
-        face_cap_mocap_settings = scene.faceit_face_cap_mocap_settings
+        face_cap_mocap_settings = scene.faceit_live_mocap_settings.get('FACECAP')
 
         row = col.row(align=True)
         row.prop(face_cap_mocap_settings, 'audio_filename', text='')
@@ -208,7 +210,7 @@ class FACEIT_PT_MocapEpic(FACEIT_PT_BaseSub, bpy.types.Panel):
 
         col = layout.column(align=True)
 
-        ue_mocap_settings = scene.faceit_epic_mocap_settings
+        ue_mocap_settings = scene.faceit_live_mocap_settings.get('EPIC')
         # draw_utils.draw_web_link(row, 'https://faceit-doc.readthedocs.io/en/latest/epic_utils/')
         row = col.row(align=True)
         row.prop(ue_mocap_settings, 'audio_filename', text='')
@@ -222,13 +224,11 @@ class FACEIT_PT_MocapEpic(FACEIT_PT_BaseSub, bpy.types.Panel):
         row.operator_context = 'INVOKE_DEFAULT'
 
         row.operator('faceit.import_epic_mocap', icon='IMPORT')
-        # xx @ NID, 30fps
-        row.operator('faceit.import_epic_mocap_30fps', icon='IMPORT')
         row.enabled = (ue_mocap_settings.filename != '')
 
 
 class FACEIT_PT_MocapOSC(FACEIT_PT_BaseMocap, bpy.types.Panel):
-    bl_label = 'OSC (Live)'
+    bl_label = 'Live Recorder'
     bl_idname = 'FACEIT_PT_MocapOSC'
     faceit_predecessor = 'FACEIT_PT_MocapImporters'
 
@@ -243,18 +243,25 @@ class FACEIT_PT_MocapOSC(FACEIT_PT_BaseMocap, bpy.types.Panel):
         recorded_data_found = bool(osc_queue)
         receiver_enabled = scene.faceit_osc_receiver_enabled
         col = layout.column(align=True)
+        row = col.row(align=False)
         col.use_property_split = True
         col.use_property_decorate = False
+        row.prop(scene, 'faceit_live_source', expand=True)
+        engine_settings = get_engine_settings(scene.faceit_live_source)
+        col.separator(factor=2)
         row = col.row(align=True)
-        row.prop(scene, 'faceit_osc_address')
+        row.prop(engine_settings, 'address')
         row = col.row(align=True)
-        row.prop(scene, 'faceit_osc_port')
+        row.prop(engine_settings, 'port')
         col.separator()
         row = col.row(align=True)
-        row.prop(scene, 'faceit_osc_rotation_units')
-
+        row.prop(engine_settings, 'mirror_x', text="Mirror X", icon='MOD_MIRROR')
+        col.separator()
+        # if hasattr(engine_settings, 'rotation_units'):
+        if engine_settings.rotation_units_variable:
+            row = col.row(align=True)
+            row.prop(engine_settings, 'rotation_units')
         col.separator(factor=2)
-
         col = layout.column(align=True)
         row = col.row(align=True)
         if not receiver_enabled:
@@ -266,10 +273,6 @@ class FACEIT_PT_MocapOSC(FACEIT_PT_BaseMocap, bpy.types.Panel):
         if osc_queue and not receiver_enabled:
             row = col.row(align=True)
             row.operator("faceit.import_live_mocap", icon='IMPORT')
-            # op.animate_head_rotation = scene.faceit_osc_animate_head_rotation
-            # op.animate_head_location = scene.faceit_osc_animate_head_location
-            # op.animate_shapes = scene.faceit_osc_animate_shapes
-
             row.operator("faceit.clear_live_data", icon='X')
 
         col.separator()
@@ -280,8 +283,8 @@ class FACEIT_PT_MocapOSC(FACEIT_PT_BaseMocap, bpy.types.Panel):
         col.use_property_split = False
         col.use_property_decorate = False
 
-        animate_loc = scene.faceit_osc_animate_head_location
-        animate_rot = scene.faceit_osc_animate_head_rotation
+        animate_loc = scene.faceit_osc_animate_head_location and engine_settings.can_animate_head_location
+        animate_rot = scene.faceit_osc_animate_head_rotation and engine_settings.can_animate_head_rotation
         animate_shapes = scene.faceit_osc_animate_shapes
 
         row = col.row(align=True)
@@ -319,12 +322,26 @@ class FACEIT_PT_MocapOSC(FACEIT_PT_BaseMocap, bpy.types.Panel):
                 # row = col.row(align=True)
                 # icon_value = 'HIDE_OFF' if face_regions.other else 'HIDE_ON'
                 # row.prop(face_regions, 'other', icon=icon_value)
+        ctrl_rig = scene.faceit_control_armature
+        if ctrl_rig:
+            col.use_property_split = False
+            row = col.row(align=True)
+            row.label(text="Control Rig")
+            if is_control_rig_connected(ctrl_rig):
+                if not scene.faceit_auto_disconnect_ctrl_rig:
+                    draw_text_block(col, text="Live Preview is disabled while the control rig is connected.",
+                                    heading="WARNING", chars_per_row=100)
+                    col.separator()
+                row = col.row(align=True)
+                row.prop(scene, "faceit_auto_disconnect_ctrl_rig", icon='UNLINKED')
         # HEAD
         row = col.row(align=True)
         row.label(text="Head Animation")
         row = col.row(align=True)
-        row.prop(scene, 'faceit_osc_animate_head_rotation', icon="BLANK1")
-        row.prop(scene, 'faceit_osc_animate_head_location', icon="BLANK1")
+        if engine_settings.can_animate_head_rotation:
+            row.prop(scene, 'faceit_osc_animate_head_rotation', icon="BLANK1")
+        if engine_settings.can_animate_head_location:
+            row.prop(scene, 'faceit_osc_animate_head_location', icon="BLANK1")
         col = col.column(align=True)
         col.use_property_split = True
         if animate_loc or animate_rot:
@@ -340,20 +357,6 @@ class FACEIT_PT_MocapOSC(FACEIT_PT_BaseMocap, bpy.types.Panel):
                 if scene.faceit_head_target_object.type != 'ARMATURE':
                     # if scene.faceit_head_sub_target
                     row.prop(scene, "faceit_use_head_location_offset", icon='TRANSFORM_ORIGINS')
-
         if not (animate_loc or animate_rot or animate_shapes):
             row = col.row()
             row.label(text="WARNING! Enable at least one type of motion")
-
-        ctrl_rig = scene.faceit_control_armature
-        if ctrl_rig:
-            col.use_property_split = False
-            if is_control_rig_connected(ctrl_rig):
-                if not scene.faceit_auto_disconnect_ctrl_rig:
-                    row = col.row(align=True)
-                    row.label(text="Control Rig")
-                    draw_text_block(col, text="Live Preview is disabled while the control rig is connected.",
-                                    heading="WARNING", chars_per_row=100)
-                col.separator()
-                row = col.row(align=True)
-                row.prop(scene, "faceit_auto_disconnect_ctrl_rig", icon='UNLINKED')

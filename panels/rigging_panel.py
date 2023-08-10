@@ -1,12 +1,16 @@
 
 import bpy
 
-from .bake_panel import draw_bake_modifier_list
 
+from .setup_panel import draw_assign_group_options
+
+from ..core.vgroup_utils import get_vertex_groups_from_objects
 from ..core import faceit_utils as futils
 from ..landmarks import landmarks_data as lm_data
 from . import draw_utils
 from .ui import FACEIT_PT_Base, FACEIT_PT_BaseSub
+
+from ..setup.assign_groups_operators import is_picker_running
 
 
 class FACEIT_PT_BaseRig(FACEIT_PT_Base):
@@ -15,10 +19,6 @@ class FACEIT_PT_BaseRig(FACEIT_PT_Base):
     @classmethod
     def poll(cls, context):
         return super().poll(context)
-        # var = (futils.get_faceit_armature(force_original=True) or not futils.get_faceit_armature()
-        #        ) or not context.scene.faceit_use_rigify_armature
-        # print(var)
-        # return var
 
 
 class FACEIT_PT_Landmarks(FACEIT_PT_BaseRig, bpy.types.Panel):
@@ -30,9 +30,6 @@ class FACEIT_PT_Landmarks(FACEIT_PT_BaseRig, bpy.types.Panel):
     @classmethod
     def poll(cls, context):
         if super().poll(context):
-            # lm_obj = futils.get_object('facial_landmarks')
-            # if lm_obj.get("state", 0) > 4:
-            #     return False
             scene = context.scene
             active_tab = scene.faceit_workspace.active_tab
             if scene.faceit_face_objects:
@@ -42,15 +39,10 @@ class FACEIT_PT_Landmarks(FACEIT_PT_BaseRig, bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-
         scene = context.scene
-
         lm_obj = futils.get_object('facial_landmarks')
-
         adaption_state = 0
-
         col = layout.column(align=True)
-
         # landmarks setup
         text = 'Generate Landmarks'
         if lm_obj:
@@ -63,6 +55,8 @@ class FACEIT_PT_Landmarks(FACEIT_PT_BaseRig, bpy.types.Panel):
             if adaption_state:
                 if adaption_state == 1:
                     text = 'Align to Chin'
+                elif adaption_state == 11:
+                    text = 'Align Rotation'
                 elif adaption_state == 2:
                     text = 'Match Face Height'
                 elif adaption_state == 3:
@@ -70,9 +64,35 @@ class FACEIT_PT_Landmarks(FACEIT_PT_BaseRig, bpy.types.Panel):
         if adaption_state == 0:
             row = col.row()
             row.prop(scene, 'faceit_asymmetric', text='Asymmetry', icon='MOD_MIRROR')
-        if adaption_state in range(0, 4):
+        if adaption_state in (0, 1, 11, 2, 3):
             row = col.row()
             row.operator('faceit.facial_landmarks', text=text, icon='TRACKER')
+        if adaption_state == 0:
+            row = col.row(align=True)
+            main_obj = futils.get_main_faceit_object()
+            if scene.faceit_workspace.active_tab == 'CONTROL':
+                row.label(text="Helpers")
+                row = col.row(align=True)
+                picker_running = is_picker_running()
+                row.operator('faceit.assign_main_modal', text='Set Main Group',
+                             icon='EYEDROPPER', depress=picker_running)
+                if main_obj:
+                    row = col.row(align=True)
+                    mod = main_obj.modifiers.get("Main Mask")
+                    if mod:
+                        row.operator('faceit.unmask_main', icon='X')
+                    else:
+                        row.operator('faceit.mask_main', icon='MOD_MASK')
+            else:
+                if main_obj:
+                    row.label(text="Helpers")
+                    row = col.row(align=True)
+                    row = col.row(align=True)
+                    mod = main_obj.modifiers.get("Main Mask")
+                    if mod:
+                        row.operator('faceit.unmask_main', icon='X')
+                    else:
+                        row.operator('faceit.mask_main', icon='MOD_MASK')
         # if adaption_state >= 4:
         if adaption_state == 4:
             row = col.row()
@@ -91,6 +111,66 @@ class FACEIT_PT_Landmarks(FACEIT_PT_BaseRig, bpy.types.Panel):
             row = col.row(align=True)
             row.operator('faceit.edit_landmarks', icon='EDITMODE_HLT')
             row.operator('faceit.finish_edit_landmarks', text='', icon='CHECKMARK')
+
+
+def draw_eye_pivot_panel(self, context):
+    layout = self.layout
+    scene = context.scene
+    col = layout.column(align=True)
+    row = col.row(align=True)
+    row.prop(scene, "faceit_eye_pivot_options", expand=True)
+    if scene.faceit_eye_pivot_options == 'EYE_GEO':
+        objects = futils.get_faceit_objects_list()
+        all_vgroups = get_vertex_groups_from_objects(objects)
+        col.label(text='Find Pivot from Vertex Group')
+        found_eye_def_groups = any(x in all_vgroups for x in ('faceit_left_eyes_other', 'faceit_right_eyes_other'))
+        if found_eye_def_groups and not scene.faceit_pivot_from_eye_deform_group:
+            grid = col.grid_flow(columns=2, align=False)
+            row = grid.row(align=True)
+            draw_assign_group_options(row, 'right_eyeball', 'Right Eyeball')
+            row = grid.row(align=True)
+            draw_assign_group_options(row, 'left_eyeball', 'Left Eyeball')
+        if found_eye_def_groups:
+            row = col.row(align=True)
+            row.prop(scene, 'faceit_pivot_from_eye_deform_group', icon='GROUP_VERTEX')
+    elif scene.faceit_eye_pivot_options == 'BONE_PIVOT':
+        col.label(text='Copy Pivots From Existing Eye Bones')
+        draw_utils.draw_anime_style_eyes(col, scene)
+        row = col.row(align=True)
+    if scene.faceit_eye_pivot_options == 'MANUAL':
+        col.label(text='Place Pivots Manually')
+        row = col.row()
+        
+        row.operator('faceit.update_eye_locators', text='Select Locators', icon='EMPTY_DATA')
+    else:
+        if scene.faceit_show_eye_locators:
+            icon = 'HIDE_OFF'
+        else:
+            icon = 'HIDE_ON'
+        row = col.row()
+        row.prop(scene, 'faceit_show_eye_locators', icon=icon)
+
+
+
+class FACEIT_PT_PivotSetupRig(FACEIT_PT_BaseSub, bpy.types.Panel):
+    bl_label = 'Pivot Setup'
+    bl_options = set()
+    bl_parent_id = 'FACEIT_PT_Landmarks'
+    bl_idname = 'FACEIT_PT_PivotSetupRig'
+    faceit_predecessor = 'FACEIT_PT_LandmarkHelpers'
+
+    @classmethod
+    def poll(cls, context):
+        if super().poll(context):
+            lm_obj = futils.get_object('facial_landmarks')
+            if lm_obj:
+                if lm_obj["state"] == 4:
+                    return True
+            else:
+                return True
+
+    def draw(self, context):
+        draw_eye_pivot_panel(self, context)
 
 
 class FACEIT_PT_LandmarkHelpers(FACEIT_PT_BaseSub, bpy.types.Panel):
@@ -198,9 +278,12 @@ class FACEIT_PT_Rigging(FACEIT_PT_BaseRig, bpy.types.Panel):
     def poll(cls, context):
         if super().poll(context):
             lm_obj = futils.get_object('facial_landmarks')
+            rig = futils.get_faceit_armature(force_original=True)
             if lm_obj:
                 if lm_obj.get("state") == 4 or futils.get_hide_obj(lm_obj):
                     return True
+            elif rig is not None:
+                return True
 
     def draw(self, context):
         layout = self.layout
@@ -211,7 +294,7 @@ class FACEIT_PT_Rigging(FACEIT_PT_BaseRig, bpy.types.Panel):
             row.operator('faceit.back_to_rigging', icon='BACK')
             col_reset.separator(factor=2)
         col = layout.column(align=True)
-        col.enabled = not scene.faceit_shapes_generated
+        col.enabled = not scene.faceit_shapes_generated or scene.faceit_armature_missing
 
         if futils.get_faceit_armature(force_original=True):
 
@@ -241,45 +324,6 @@ class FACEIT_PT_Rigging(FACEIT_PT_BaseRig, bpy.types.Panel):
             col.operator('faceit.generate_rig', text='Generate Faceit Rig', icon='ARMATURE_DATA')
 
 
-class FACEIT_PT_RigHelpers(FACEIT_PT_BaseSub, bpy.types.Panel):
-    bl_label = 'Rig Helpers'
-    bl_options = set()
-    bl_parent_id = 'FACEIT_PT_Rigging'
-    bl_idname = 'FACEIT_PT_RigHelpers'
-
-    @classmethod
-    def poll(cls, context):
-        if super().poll(context):
-            lm_obj = futils.get_object('facial_landmarks')
-            if lm_obj:
-                if lm_obj["state"] == 4:
-                    return not futils.get_faceit_armature(force_original=True)
-
-    def draw(self, context):
-        layout = self.layout
-        scene = context.scene
-        col = layout.column(align=True)
-        row = col.row(align=True)
-        row.operator('faceit.generate_locator_empties', icon='EMPTY_DATA')
-        row = col.row(align=True)
-        if any([n in bpy.data.objects for n in lm_data.LOCATOR_NAMES]):
-            if not scene.show_locator_empties:
-                op = row.operator('faceit.edit_locator_empties', text='Show Locators',
-                                  icon='HIDE_ON')
-                op.hide_value = False
-            else:
-                op = row.operator('faceit.edit_locator_empties', text='Hide Locators',
-                                  icon='HIDE_OFF')
-                op.hide_value = True
-
-            op_remove = row.operator('faceit.edit_locator_empties', text='Remove Locators', icon='X')
-            op_remove.remove = True
-        if scene.faceit_body_armature:
-            draw_utils.draw_anime_style_eyes(col, scene)
-
-        col.use_property_split = False
-
-
 class FACEIT_PT_ModifierOptions(FACEIT_PT_BaseSub, bpy.types.Panel):
     bl_label = 'Other Modifiers'
     bl_parent_id = 'FACEIT_PT_Rigging'
@@ -294,8 +338,5 @@ class FACEIT_PT_ModifierOptions(FACEIT_PT_BaseSub, bpy.types.Panel):
                     return futils.get_faceit_armature(force_original=True)
 
     def draw(self, context):
-        scene = context.scene
         col = self.layout.column()
-        # row.label(text="Add Modifiers")
-        # row = col.row()
         col.operator("faceit.smooth_correct", icon='MOD_SMOOTH')

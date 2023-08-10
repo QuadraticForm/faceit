@@ -47,7 +47,7 @@ class FACEIT_PT_BaseSub():
     bl_category = 'FACEIT'
     bl_label = 'Base Sub'
     bl_options = {'DEFAULT_CLOSED'}
-
+    bl_parent_id = ''
     faceit_predecessor = ''
 
     @classmethod
@@ -77,7 +77,12 @@ class FACEIT_PT_MainPanel(bpy.types.Panel):
         row = box.row()
         faceit_workspace = scene.faceit_workspace
 
-        draw_utils.draw_panel_dropdown_expander(row, faceit_workspace, 'expand_ui', 'Choose Workspace')
+        if faceit_workspace.expand_ui:
+            icon = 'TRIA_DOWN'
+        else:
+            icon = 'TRIA_RIGHT'
+        row.prop(faceit_workspace, 'expand_ui', text='Choose Workspace',
+                 icon=icon, icon_only=True, emboss=False)
 
         if faceit_workspace.expand_ui:
             box.row().prop(faceit_workspace, 'workspace', expand=True, icon='CUBE')
@@ -87,14 +92,13 @@ class FACEIT_PT_MainPanel(bpy.types.Panel):
 
         layout.separator()
 
-        rig = futils.get_faceit_armature()
-
+        rig = context.scene.faceit_armature
         if active_tab != 'SETUP':
-            if not scene.faceit_face_objects:
+            if not scene.faceit_face_objects and not scene.faceit_control_armature:
                 col = layout.column()
                 row = col.row()
                 row.alert = True
-                op = row.operator('faceit.go_to_tab', text='Complete Setup first...')
+                op = row.operator('faceit.go_to_tab', text='Complete Setup First...')
                 op.tab = 'SETUP'
                 return
 
@@ -106,14 +110,37 @@ class FACEIT_PT_MainPanel(bpy.types.Panel):
                 op = row.operator('faceit.go_to_tab', text='No Targets Shapes found...')
                 op.tab = 'SHAPES'
                 return
+            if active_tab == 'CONTROL':
+                if scene.faceit_face_objects:
+                    col = layout.column()
+                    if scene.faceit_pin_panels.FACEIT_PT_Landmarks:
+                        icon = 'PINNED'
+                    else:
+                        icon = 'UNPINNED'
+                    row = col.row()
+                    row.prop(scene, "faceit_show_landmarks_ctrl_rig", text="Show Landmark Panel", icon=icon)
 
-        if active_tab == 'EXPRESSIONS':
-            if not rig:
-                col = layout.column()
-                row = col.row()
-                row.alert = True
-                op = row.operator('faceit.go_to_tab', text='Generate Rig First...')
-                op.tab = 'CREATE'
+        elif active_tab in ('EXPRESSIONS', 'BAKE', 'CREATE'):
+            if rig is None:
+                if scene.faceit_armature_missing:
+                    col = layout.column()
+                    row = col.row()
+                    row.alert = True
+                    row.label(text="Warning: The Faceit Rig has been deleted.")
+                if active_tab != 'CREATE':
+                    col = layout.column()
+                    row = col.row()
+                    row.alert = True
+                    op = row.operator('faceit.go_to_tab', text='Generate Rig First...')
+                    op.tab = 'CREATE'
+            elif active_tab == 'BAKE':
+                if 'overwrite_shape_action' not in bpy.data.actions or not scene.faceit_expression_list:
+                    col = layout.column()
+                    row = col.row()
+                    row.alert = True
+                    op = row.operator('faceit.go_to_tab', text='Generate Expressions First...')
+                    op.tab = 'EXPRESSIONS'
+
         if futils.get_any_view_locked():
             row = layout.row()
             row.operator("faceit.unlock_3d_view", icon='LOCKED', depress=True)

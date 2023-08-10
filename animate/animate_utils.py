@@ -2,10 +2,86 @@ from math import floor
 from typing import Iterable, Tuple
 
 import bpy
-from mathutils import Matrix, Vector
+from mathutils import Matrix, Vector, Euler, Quaternion
 
 
 from ..core.fc_dr_utils import get_fcurve_from_bpy_struct
+
+
+def get_rotation_mode(target) -> str:
+    '''Get the rotation mode from the target (object or bone)'''
+    rot_mode = target.rotation_mode
+    if len(rot_mode) <= 3:
+        # EULER if rotation mode in ('XYZ','ZXY',...)
+        rot_mode = 'EULER'
+    return rot_mode
+
+
+def get_data_path_from_rotation_mode(rot_mode):
+    '''returns the data path value for the rotation mode (rotation_euler, rotation_quaternion, rotation_axis_angle)'''
+    if rot_mode == 'EULER':
+        return 'rotation_euler'
+    return f'rotation_{rot_mode.lower()}'
+
+
+def get_rotation_mode_from_data_path_val(dp):
+    '''returns the rotation mode of the data path (EULER, QUATERNION, AXIS_ANGLE)'''
+    return dp[dp.find("rotation_") + 9:].upper()
+
+
+def get_data_path_value(full_data_path):
+    '''returns the transform part of the data path (location, rotation_euler, rotation_quaternion, rotation_axis_angle, scale)'''
+    return full_data_path.split('.')[-1]
+
+
+def get_bone_name_from_data_path(dp):
+    '''returns the bone name of the data path'''
+    return dp[dp.find("bones[\"") + 7: dp.find("\"]")]
+
+
+def get_value_as_rotation(rot_mode, rotation_value):
+    '''Returns the rotation value as a rotation
+        @param rot_mode: value in ('EULER', 'QUATERNION', 'AXIS_ANGLE')
+        @param rotation_value (list): rotation value to convert
+    '''
+    if rot_mode == 'EULER':
+        rot = Euler(rotation_value)
+    elif rot_mode == 'QUATERNION':
+        rot = Quaternion(rotation_value)
+    else:
+        angle = rotation_value.pop(0)
+        axis = Vector(rotation_value)
+        rot = Matrix.Rotation(angle, 4, axis)
+    return rot
+
+
+def convert_rotation_values(rot, rot_mode_from, rot_mode_to):
+    """
+    converts rotation values to the expected rotation mode of the bone
+        @param rot: rotation values to convert (either euler, quaternion or axis angle)
+        @param rot_mode_from: rotation mode to convert from
+        @param rot_mode_to: rotation mode to convert to
+    """
+    if rot_mode_from == 'EULER':
+        rot = rot.to_quaternion()
+        if rot_mode_to == 'AXIS_ANGLE':
+            vec, angle = rot.to_axis_angle()
+            rot = [angle]
+            rot.extend([i for i in vec])
+        return rot
+    if rot_mode_from == 'QUATERNION':
+        if rot_mode_to == 'EULER':
+            rot = rot.to_euler()
+        else:
+            vec, angle = rot.to_axis_angle()
+            rot = [angle]
+            rot.extend([i for i in vec])
+        return rot
+    if rot_mode_to == 'EULER':
+        rot = rot.to_euler()
+    else:
+        rot = rot.to_quaternion()
+    return rot
 
 
 def ensure_mouth_lock_rig_drivers(rig):
@@ -91,56 +167,57 @@ def matrix_world(armature_ob, bone_name):
     return matrix_world(armature_ob, parent.name) @ (parent_local.inverted() @ local) @ basis
 
 
-def scale_poses_to_new_dimensions_slow(rig, scale=(1, 1, 1), filter_skip: list = None, frames: list = None) -> None:
-    '''
-    Bring a loaded .face pose file to the dimensions of the current character.
-    Scale the world location delta for each pose.
-    '''
+def scale_poses_to_new_dimensions_slow(
+        rig,
+        pose_bones: Iterable[bpy.types.PoseBone],
+        scale=(1, 1, 1),
+        active_action=None,
+        frames: list = None) -> None:
+    """
+    Bring a loaded .face pose file to the dimensions of the current character. Scale the world location delta for each pose.
+        @rig [bpy.types.Object]: the rig to scale
+        @scale [Vector3]: the scale factor in world space
+        @active_action [bpy.types.Action]: the action to scale
+        @frames [list - int]: frames to scale
+    """
     if frames is None:
         return
-    if filter_skip is None:
-        filter_skip = []
-
-    action = rig.animation_data.action
-    if not action:
-        return
-
-    for pb in rig.pose.bones:
-        if pb.name not in filter_skip and not any(x in pb.name for x in ['DEF', 'MCH']):
-            for c in pb.constraints:
-                c.mute = True
-
+    # Get only the animated bones if possible.
+    if active_action:
+        for pb in pose_bones:
+            dp = f'pose.bones["{pb.name}"].location'
+            if not any(fc.data_path == dp for fc in active_action.fcurves):
+                pose_bones.remove(pb)
+    # Mute all constraints
+    for pb in pose_bones:
+        for c in pb.constraints:
+            c.mute = True
     for frame in frames:
         bpy.context.scene.frame_set(frame)
-        # for pb in sorted(rig.pose.bones, key=lambda x: get_parent_count(x), reverse=False):
-        for pb in rig.pose.bones:
-            if pb.name not in filter_skip and not any(x in pb.name for x in ['DEF', 'MCH']):
+        for pb in pose_bones:
+            if pb.matrix_basis == Matrix.Identity(4):
+                continue
+            # Get the pose bone rest position relative to the parent bones pose!
+            w_rest = rig.matrix_world @ pb.parent.matrix @ pb.parent.bone.matrix_local.inverted() @ pb.bone.matrix_local
+            # Get the pose bones pose relative to relative rest
+            w_pose = w_rest @ pb.matrix_basis
+            # Get the world translation vector
+            w_delta = w_pose.translation - w_rest.translation
+            # Scale the translation vector
+            if bpy.app.version >= (2, 90, 0):
+                w_delta_scaled = w_delta * Vector(scale)
+            else:
+                w_delta_scaled = Vector([w_delta[i] * scale[i] for i in range(3)])
+            # Reconstruction of the pose matrix
+            w_pose_scaled = Matrix.Translation(w_delta_scaled) @ w_rest
+            l_pose_scaled = rig.matrix_world.inverted() @ w_pose_scaled
+            pb.matrix = l_pose_scaled
 
-                if pb.matrix_basis == Matrix.Identity(4):
-                    continue
+            pb.keyframe_insert('location', frame=frame)
 
-                # Get the pose bone rest position relative to the parent bones pose!
-                w_rest = rig.matrix_world @ pb.parent.matrix @ pb.parent.bone.matrix_local.inverted() @ pb.bone.matrix_local
-                # Get the pose bones pose relative to relative rest
-                w_pose = w_rest @ pb.matrix_basis
-
-                w_delta = w_pose.translation - w_rest.translation
-
-                if bpy.app.version >= (2, 90, 0):
-                    w_delta_scaled = w_delta * Vector(scale)
-                else:
-                    w_delta_scaled = Vector([w_delta[i] * scale[i] for i in range(3)])
-
-                w_pose_scaled = Matrix.Translation(w_delta_scaled) @ w_rest
-                l_pose_scaled = rig.matrix_world.inverted() @ w_pose_scaled
-                pb.matrix = l_pose_scaled
-
-                pb.keyframe_insert('location')
-
-    for pb in rig.pose.bones:
-        if pb.name not in filter_skip and not any(x in pb.name for x in ['DEF', 'MCH']):
-            for c in pb.constraints:
-                c.mute = False
+    for pb in pose_bones:
+        for c in pb.constraints:
+            c.mute = False
 
 
 def get_eye_dimensions(rig) -> Tuple:
@@ -203,7 +280,7 @@ def scale_eye_animation(rig, eye_dim_L_old, eye_dim_R_old, action=None) -> None:
     )
 
 
-def scale_anime_eye_animation(rig, scale_factor=0.25, action=None,) -> None:
+def scale_eye_look_animation(rig, scale_factor=0.25, action=None,) -> None:
     '''Scale the anime eye animation (all keyframes)'''
 
     if not action:
@@ -211,7 +288,7 @@ def scale_anime_eye_animation(rig, scale_factor=0.25, action=None,) -> None:
     if not action:
         return
 
-    eye_bones = ["eye.R", "eye.L"]
+    eye_bones = ["eye.R", "eye.L", "eyes", "eye_common"]
 
     amplify_pose(
         action,
@@ -227,27 +304,32 @@ def amplify_pose(action, filter_pose_bone_names: list = None, frame=-1, scale_fa
     @frame [int]: specify a single frame. -1 scales all.
     @scale_factor [float]: the factor.
     '''
-
-    fcurves = []
-    if filter_pose_bone_names:
-        for bone_name in filter_pose_bone_names:
-            base_dp = f'pose.bones["{bone_name}"].'
-            data_paths = [base_dp + 'location', base_dp + 'rotation_euler']
-            for dp in data_paths:
-                for i in range(3):
-                    fc = action.fcurves.find(dp, index=i)
-                    if fc:
-                        fcurves.append(fc)
-    else:
-        fcurves = action.fcurves
-    for fc in fcurves:
-        if fc.data_path.split('].')[-1] == 'scale':
-            continue
-        for kf in fc.keyframe_points:
-            if frame != -1:
-                if kf.co[0] != frame:
+    for fc in action.fcurves:
+        dp = fc.data_path
+        bone_name = dp.split('["')[1].split('"]')[0]
+        if filter_pose_bone_names:
+            if bone_name not in filter_pose_bone_names:
+                continue
+        if any([s in dp for s in ['location', 'rotation_euler', 'rotation_quaternion']]):
+            if 'rotation_quaternion' in dp:
+                if fc.array_index == 0:
                     continue
-            kf.co[1] *= scale_factor
+            for kf in fc.keyframe_points:
+                if kf.co[1] == 0:
+                    continue
+                if frame != -1:
+                    if kf.co[0] != frame:
+                        continue
+                kf.co[1] *= scale_factor
+        elif 'scale' in dp:
+            for kf in fc.keyframe_points:
+                if kf.co[1] == 1:
+                    continue
+                if frame != -1:
+                    if kf.co[0] != frame:
+                        continue
+                # Subtract 1.0 from value and scale it. Then add 1.0 to the result.
+                kf.co[1] = ((kf.co[1] - 1.0) * scale_factor) + 1.0
 
 
 def set_pose_from_timeline(context):

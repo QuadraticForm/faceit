@@ -1,18 +1,12 @@
-from enum import Enum
-from pydoc import describe
 import bpy
-from bpy.props import BoolProperty, EnumProperty, PointerProperty, StringProperty, IntProperty, FloatProperty
+from bpy.props import BoolProperty, EnumProperty, PointerProperty, StringProperty, IntProperty, FloatProperty, CollectionProperty
 from bpy.types import PropertyGroup, Scene, SoundSequence, Object, Action
 
 from ..core.retarget_list_base import FaceRegionsBase
-from ..core.faceit_utils import get_faceit_objects_list
-
-# --------------- CLASSES --------------------
-# | - Property Groups (Collection-/PointerProperty)
-# ----------------------------------------------
 
 
 class Mocap_Engine_Properties(PropertyGroup):
+    '''Mocap Engine Properties'''
     filename: StringProperty(
         name='Filename',
         default='',
@@ -21,31 +15,41 @@ class Mocap_Engine_Properties(PropertyGroup):
         name='Audio File',
         default='',
     )
-    master_expanded: BoolProperty(
-        name='Expand UI',
+    address: StringProperty(
+        name='Address',
+        default='0.0.0.0',
+        description='Enter the IP address of where the hallway tile app is currently running. Only works in MacOS for now.'
+    )
+    port: IntProperty(
+        name='Port',
+        default=9001,
+        description='Default Port = 9001',
+    )
+    rotation_units: EnumProperty(
+        name='Rotation Units',
+        items=(
+            ('DEG', 'Degrees', 'Degrees'),
+            ('RAD', 'Radians', 'Radians'),
+        ),
+        default='DEG',
+    )
+    rotation_units_variable: BoolProperty(
+        name='Variable Rotation Units',
         default=False,
     )
-    file_import_expanded: BoolProperty(
-        name='Expand UI',
+    mirror_x: BoolProperty(
+        name='Mirror X',
         default=False,
     )
-    live_mode_expanded: BoolProperty(
-        name='Expanded UI',
-        default=False,
+    can_animate_head_location: BoolProperty(
+        default=True
     )
-    mocap_engine: StringProperty(
-        name='Mocap Engine',
-        description='The software or app to record or stream motion'
+    can_animate_head_rotation: BoolProperty(
+        default=True
     )
-    indices_order: StringProperty(
-        name='Order of Shape Key Indices',
-        description='The order of the Shape Keys used by this engine'
+    can_animate_eye_rotation: BoolProperty(
+        default=True
     )
-
-
-# --------------- FUNCTIONS --------------------
-# | - Update/Getter/Setter
-# ----------------------------------------------
 
 
 def update_record_face_cap(self, context):
@@ -154,6 +158,12 @@ def register():
         update=update_head_action,
         poll=head_action_poll
     )
+    ############## Live Mocap ##################
+
+    Scene.faceit_live_mocap_settings = CollectionProperty(
+        type=Mocap_Engine_Properties,
+        name='Mocap Properties',
+    )
     ############## Face Cap App ##################
 
     Scene.faceit_face_cap_mocap_settings = PointerProperty(
@@ -167,20 +177,6 @@ def register():
         description='Record on Play - Setup AddRoutes first'
     )
 
-    ############## Live Link Face ##################
-
-    Scene.faceit_epic_mocap_settings = PointerProperty(
-        type=Mocap_Engine_Properties,
-        name='Live Link Face Properties',
-    )
-
-    ############## Audio2Face ######################
-
-    Scene.faceit_a2f_mocap_settings = PointerProperty(
-        type=Mocap_Engine_Properties,
-        name='Audio2Face Properties',
-    )
-
     SoundSequence.faceit_audio = BoolProperty(
         name='Faceit Audio',
         description='Whether this is a Faceit audio sequence',
@@ -189,15 +185,15 @@ def register():
 
     ############## OSC #####################
 
-    Scene.faceit_osc_address = StringProperty(
-        name='Address',
-        default='0.0.0.0',
-        description='Enter the IP address of where the hallway tile app is currently running. Only works in MacOS for now.'
-    )
-    Scene.faceit_osc_port = IntProperty(
-        name='Port',
-        default=9001,
-        description='Default Port = 9001',
+    Scene.faceit_live_source = EnumProperty(
+        name="Live Source",
+        items=(
+            ('FACECAP', 'Face Cap', 'Face Cap App '),
+            ('TILE', 'Hallway Tile', 'Hallway Tile'),
+            ('EPIC', 'Live Link Face', 'Epic Live Link Face '),
+            ('IFACIALMOCAP', 'iFacialMocap', 'iFacialMocap '),
+        ),
+        default='FACECAP'
     )
     Scene.faceit_osc_receiver_enabled = BoolProperty(
         name="Receiver Enabled",
@@ -241,6 +237,11 @@ def register():
         default=False,
         description="Disable or enable the face regions filter for live animation."
     )
+    Scene.faceit_osc_flip_animation = BoolProperty(
+        name="Flip Animation",
+        default=False,
+        description="Flip the animation on the X axis."
+    )
     Scene.faceit_auto_disconnect_ctrl_rig = BoolProperty(
         name="Auto Disconnect Drivers",
         description="Disconnect the control rig drivers while recording.",
@@ -251,13 +252,8 @@ def register():
 def unregister():
     del Scene.faceit_mocap_action
     del Scene.faceit_bake_sk_to_crig_action
-    del Scene.faceit_face_cap_mocap_settings
     del Scene.faceit_record_face_cap
-    del Scene.faceit_epic_mocap_settings
-    del Scene.faceit_a2f_mocap_settings
     del SoundSequence.faceit_audio
-    del Scene.faceit_osc_address
-    del Scene.faceit_osc_port
     del Scene.faceit_osc_receiver_enabled
     del Scene.faceit_osc_face_regions
     del Scene.faceit_osc_animate_head_rotation

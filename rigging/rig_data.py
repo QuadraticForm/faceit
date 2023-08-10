@@ -426,6 +426,26 @@ bone_dict_asymmetric = {
         'tail': [],
         'all': ['master_eye.R', 'DEF_eye.R', 'MCH-eye.R'],
     },
+    112: {
+        'head': ['DEF-tongue'],
+        'tail': ['tongue_master'],
+        'all': ['tongue']
+    },
+    113: {
+        'head': ['DEF-tongue.001', 'tongue_master'],
+        'tail': ['DEF-tongue'],
+        'all': ['tongue.001']
+    },
+    114: {
+        'head': ['DEF-tongue.002', 'tongue_master'],
+        'tail': ['DEF-tongue.001'],
+        'all': ['tongue.002']
+    },
+    115: {
+        'head': [],
+        'tail': ['DEF-tongue.002'],
+        'all': ['tongue.003']
+    },
 
 }
 # ---------------- SYMMETRIC -------------------------
@@ -704,5 +724,25 @@ bone_dict_symmetric = {
         'head': ['MCH-lid.T.R', 'MCH-lid.T.R.001', 'MCH-lid.T.R.002', 'MCH-lid.T.R.003', 'MCH-lid.B.R', 'MCH-lid.B.R.001', 'MCH-lid.B.R.002', 'MCH-lid.B.R.003', ],
         'tail': [],
         'all': ['master_eye.R', 'DEF_eye.R', 'MCH-eye.R'],
+    },
+    112: {
+        'head': ['DEF-tongue'],
+        'tail': ['tongue_master'],
+        'all': ['tongue']
+    },
+    113: {
+        'head': ['DEF-tongue.001', 'tongue_master'],
+        'tail': ['DEF-tongue'],
+        'all': ['tongue.001']
+    },
+    114: {
+        'head': ['DEF-tongue.002', 'tongue_master'],
+        'tail': ['DEF-tongue.001'],
+        'all': ['tongue.002']
+    },
+    115: {
+        'head': [],
+        'tail': ['DEF-tongue.002'],
+        'all': ['tongue.003']
     },
 }

@@ -35,7 +35,7 @@ class FACEIT_PT_Expressions(FACEIT_PT_BaseExpressions, bpy.types.Panel):
         layout = self.layout
         scene = context.scene
         rig = get_faceit_armature()
-        actions_disabled = rig.hide_viewport is True or scene.faceit_shapes_generated
+        shapes_baked = rig.hide_viewport is True or scene.faceit_shapes_generated
         col = layout.column(align=True)
 
         # row = col.row()
@@ -49,13 +49,18 @@ class FACEIT_PT_Expressions(FACEIT_PT_BaseExpressions, bpy.types.Panel):
 
 # START ####################### VERSION 2 ONLY #######################
 
-        if not actions_disabled and scene.faceit_version == 2:
+        if not shapes_baked and scene.faceit_version == 2:
             box = col.box()
             row = box.row()
-            draw_utils.draw_panel_dropdown_expander(row, scene, 'faceit_expression_init_expand_ui', 'Create      ')
+            if scene.faceit_expression_init_expand_ui:
+                icon = 'TRIA_DOWN'
+            else:
+                icon = 'TRIA_RIGHT'
+            row.prop(scene, 'faceit_expression_init_expand_ui', text='Create        ',
+                     icon=icon, icon_only=True, emboss=False)
             if scene.faceit_expression_init_expand_ui:
                 col_above_list = box.column(align=True)
-                if actions_disabled:
+                if shapes_baked:
                     col_above_list.enabled = False
                 row = col_above_list.row(align=True)
                 row.operator('faceit.append_action_to_faceit_rig', text='Load Faceit Expressions', icon='ACTION')
@@ -70,7 +75,18 @@ class FACEIT_PT_Expressions(FACEIT_PT_BaseExpressions, bpy.types.Panel):
 
 # END ######################### VERSION 2 ONLY #######################
 
-        if actions_disabled:
+# START ######################### VERSION 1 ONLY #######################
+        if not shapes_baked and scene.faceit_version == 1:
+            row = col.row(align=True)
+            op = row.operator('faceit.append_action_to_faceit_rig',
+                              text='Load ARKit Expressions', icon='ACTION')
+            op.is_version_one = True
+            op.load_method = 'OVERWRITE'
+            op.expressions_type = 'ARKIT'
+
+# END ######################### VERSION 1 ONLY #######################
+
+        if shapes_baked:
             row = col.row()
             row.label(text="Return")
             row = col.row()
@@ -80,19 +96,10 @@ class FACEIT_PT_Expressions(FACEIT_PT_BaseExpressions, bpy.types.Panel):
             row.template_list('FACEIT_UL_ExpressionsBaked', '', bpy.context.scene,
                               'faceit_expression_list', scene, 'faceit_expression_list_index')
             row = col.row(align=True)
-            row.prop(scene, 'faceit_sync_shapes_index', icon='UV_SYNC_SELECT')
-            if scene.faceit_sync_shapes_index:
-                # row = col.row()
-                if scene.faceit_shape_key_lock:
-                    pin_icon = 'PINNED'
-                else:
-                    pin_icon = 'UNPINNED'
-                row.prop(scene, 'faceit_shape_key_lock', icon=pin_icon)
-            row = col.row(align=True)
             row.label(text='Testing')
             row = col.row(align=True)
             row.operator('faceit.test_action', icon='ACTION')
-        elif 'faceit_shape_action' in bpy.data.actions and scene.faceit_expression_list:
+        elif 'overwrite_shape_action' in bpy.data.actions and scene.faceit_expression_list:
             col.separator()
             row = col.row()
             row.template_list('FACEIT_UL_Expressions', '', bpy.context.scene,
@@ -123,6 +130,10 @@ class FACEIT_PT_Expressions(FACEIT_PT_BaseExpressions, bpy.types.Panel):
             row = col_ul.row(align=True)
             op = row.operator('faceit.move_expression_item', text='', icon='TRIA_DOWN')
             op.direction = 'DOWN'
+        elif 'overwrite_shape_action' not in bpy.data.actions and scene.faceit_expression_list:
+            col.separator()
+            row = col.row()
+            draw_utils.draw_text_block(row, text='The Expression Action has been deleted.')
 
 
 class FACEIT_PT_ExpressionOptions(FACEIT_PT_BaseExpressions, bpy.types.Panel):
@@ -167,6 +178,10 @@ class FACEIT_PT_ExpressionOptions(FACEIT_PT_BaseExpressions, bpy.types.Panel):
             if scene.faceit_try_mirror_corrective_shapes:
                 row = col.row(align=True)
                 row.prop(scene, 'faceit_corrective_sk_mirror_method', expand=True, icon='MOD_MIRROR')
+            row = col.row(align=True)
+            row.label(text='Edit Mode')
+            row = col.row(align=True)
+            row.prop(scene, 'faceit_corrective_shape_keys_edit_mode', icon='EDITMODE_HLT', expand=True)
 
 
 class FACEIT_UL_Expressions(bpy.types.UIList):

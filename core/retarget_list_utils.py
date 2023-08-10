@@ -1,4 +1,6 @@
+from ..core.shape_key_utils import get_shape_key_names_from_objects
 from .faceit_data import FACE_REGIONS_BASE
+from .faceit_utils import get_faceit_objects_list
 
 
 def get_index_from_path(shape_item_path):
@@ -52,6 +54,17 @@ def eval_target_shapes(retarget_list):
     return target_shapes_initiated
 
 
+def set_base_regions_from_dict(retarget_list):
+    # Get shape region
+    for region, shapes in FACE_REGIONS_BASE.items():
+        for shape_name in shapes:
+            item = retarget_list.get(shape_name)
+            if item:
+                item.region = region
+            # else:
+            #     item.region = 'Other'
+
+
 def get_target_shapes_dict(retarget_list, force_empty_strings=False):
     '''Returns a dict of arkit shape name and target shape based on retarget_list collectionprop'''
 
@@ -73,17 +86,6 @@ def get_target_shapes_dict(retarget_list, force_empty_strings=False):
                 # elif
 
     return target_shapes_dict
-
-
-def set_base_regions_from_dict(retarget_list):
-    # Get shape region
-    for region, shapes in FACE_REGIONS_BASE.items():
-        for shape_name in shapes:
-            item = retarget_list.get(shape_name)
-            if item:
-                item.region = region
-            # else:
-            #     item.region = 'Other'
 
 
 def get_all_set_target_shapes_regions(retarget_list):
@@ -112,3 +114,50 @@ def get_all_set_target_shapes_regions(retarget_list):
 
             # if not shape_region_dict[region]:
     return shape_region_dict
+
+
+def get_target_shape_key_dict(objects, retarget_shapes):
+    '''Return a dictionary of all target shape keys from all objects'''
+    target_shapes_dict = {}
+    for shape_item in retarget_shapes:
+        target_shapes_dict[shape_item.name] = []
+        _target_shapes = shape_item.target_shapes
+        for obj in objects:
+            if obj.data.shape_keys:
+                keys = obj.data.shape_keys.key_blocks
+                for ts in _target_shapes:
+                    shape_key = keys.get(ts.name)
+                    if shape_key:
+                        target_shapes_dict[shape_item.name].append(shape_key)
+    return target_shapes_dict
+
+
+def get_target_shape_keys(item, objects):
+    target_shape_keys = []
+    for obj in objects:
+        if obj.data.shape_keys:
+            for ts in item.target_shapes:
+                keys = obj.data.shape_keys.key_blocks
+                shape_key = keys.get(ts.name)
+                if shape_key:
+                    target_shape_keys.append(shape_key)
+    return target_shape_keys
+
+
+def get_invalid_target_shapes(item):
+    ''' Check if the target shapes for this item do exist. '''
+    sk_names = get_shape_key_names_from_objects()
+    return [item.name for item in item.target_shapes if item.name not in sk_names]
+
+
+def are_target_shapes_valid(item):
+    ''' Check if the target shapes for this item do exist. '''
+    if not item.target_shapes:
+        return False
+    return not get_invalid_target_shapes(item)
+
+
+def target_shape_key_in_registered_objects(target_shape):
+    ''' Check if the target shapes for this item do exist. '''
+    sk_names = get_shape_key_names_from_objects()
+    return target_shape.name in sk_names

@@ -2,10 +2,11 @@
 from operator import attrgetter
 import bpy
 from mathutils import Vector
-from bpy.props import BoolProperty, StringProperty
+from bpy.props import BoolProperty, StringProperty, EnumProperty
+
 
 from ..core.modifier_utils import add_faceit_armature_modifier, get_faceit_armature_modifier
-
+from ..core.pose_utils import reset_pose
 from ..core import faceit_data as fdata
 from ..core import faceit_utils as futils
 from ..core import shape_key_utils as sk_utils
@@ -36,16 +37,23 @@ class FACEIT_OT_GenerateRig(bpy.types.Operator):
         name='Use Existing Corrective Shape Keys',
         default=False,
     )
+    weights_restorable = False
+    expressions_restorable = False
+    corr_sk_restorable = False
 
     @classmethod
     def poll(cls, context):
         return context.scene.faceit_face_objects
 
     def invoke(self, context, event):
-        # if self.all_objects:
-        self.weights_restorable = context.scene.faceit_weights_restorable
-        self.expressions_restorable = context.scene.faceit_expressions_restorable
-        self.corr_sk_restorable = context.scene.faceit_corrective_sk_restorable
+        if context.scene.faceit_armature_missing:
+            self.weights_restorable = True
+            self.expressions_restorable = True
+            self.use_existing_corr_sk = self.corr_sk_restorable = True
+        else:
+            self.weights_restorable = context.scene.faceit_weights_restorable
+            self.expressions_restorable = context.scene.faceit_expressions_restorable
+            self.use_existing_corr_sk = self.corr_sk_restorable = context.scene.faceit_corrective_sk_restorable
         if self.weights_restorable or self.expressions_restorable:
             wm = context.window_manager
             return wm.invoke_props_dialog(self)
@@ -54,67 +62,57 @@ class FACEIT_OT_GenerateRig(bpy.types.Operator):
 
     def draw(self, context):
         layout = self.layout
-
-        row = layout.row()
         if self.weights_restorable:
-            row.prop(self, 'use_existing_weights')
+            row = layout.row()
+            row.prop(self, 'use_existing_weights', icon='GROUP_VERTEX')
         if self.expressions_restorable:
-            row.prop(self, 'use_existing_expressions')
-        row = layout.row()
-        if self.corr_sk_restorable and self.use_existing_expressions:
-            row.prop(self, 'use_existing_corr_sk')
+            row = layout.row()
+            row.prop(self, 'use_existing_expressions', icon='ACTION')
+            row = layout.row()
+            row.prop(self, 'use_existing_corr_sk', icon='SCULPTMODE_HLT')
+            row.enabled = self.corr_sk_restorable and self.use_existing_expressions
 
     def execute(self, context):
         scene = context.scene
-
         global rig_create_warning
         rig_create_warning = False
-
         auto_key = scene.tool_settings.use_keyframe_insert_auto
         scene.tool_settings.use_keyframe_insert_auto = False
-
         if scene.is_nla_tweakmode:
             futils.exit_nla_tweak_mode(context)
-
         landmarks = futils.get_object('facial_landmarks')
         if not landmarks:
             self.report(
                 {'WARNING'},
                 'You need to setup the Faceit Landmarks for your character in order to fit the Control Rig to your character.')
             return {'CANCELLED'}
-
         if context.object:
             try:
                 bpy.ops.object.mode_set(mode='OBJECT')
             except RuntimeError:
                 pass
-        # landmarks done - reset vertex size
-        if not all(x in scene.objects for x in ("eye_locator_L", "eye_locator_R")):
-            anime_rig = None
-            if scene.faceit_use_eye_pivots:
-                anime_rig = scene.faceit_body_armature
-            if anime_rig:
-                if scene.faceit_anime_ref_eyebone_l in anime_rig.data.bones and scene.faceit_anime_ref_eyebone_r in anime_rig.data.bones:
-                    bpy.ops.faceit.generate_locator_empties(
-                        'EXEC_DEFAULT',
-                        eye_locators=True,
-                        teeth_locators=False,
-                        jaw_locator=False,
-                    )
+        # if not all(x in scene.objects for x in ("eye_locator_L", "eye_locator_R")):
+        #     body_rig = None
+        #     if scene.faceit_eye_pivot_options == 'BONE_PIVOT':
+        #         body_rig = scene.faceit_body_armature
+        #     if body_rig:
+        #         if scene.faceit_anime_ref_eyebone_l in body_rig.data.bones and scene.faceit_anime_ref_eyebone_r in body_rig.data.bones:
+        #             bpy.ops.faceit.generate_locator_empties(
+        #                 'EXEC_DEFAULT',
+        #                 eye_locators=True,
+        #                 teeth_locators=False,
+        #                 jaw_locator=False,
+        #             )
         bpy.ops.faceit.unmask_main('EXEC_DEFAULT')
-        bpy.ops.faceit.edit_locator_empties('EXEC_DEFAULT', hide_value=True)
-
+        set_locator_hidden_state(hide=True)
         rig_filepath = fdata.get_rig_file()
-
         faceit_collection = futils.get_faceit_collection()
-
         rig = futils.get_faceit_armature(force_original=True)
         if rig:
             bpy.data.objects.remove(rig)
         # load the objects data in the rig file
         with bpy.data.libraries.load(rig_filepath) as (data_from, data_to):
             data_to.objects = data_from.objects
-
         # add only the armature
         for obj in data_to.objects:
             if obj.type == 'ARMATURE' and obj.name == 'FaceitRig':
@@ -147,6 +145,7 @@ class FACEIT_OT_GenerateRig(bpy.types.Operator):
 
         bpy.ops.object.mode_set(mode='OBJECT')
         rig.location = landmarks.location
+        rig.rotation_euler = landmarks.rotation_euler
         # get average dimensions
         dim_lm = landmarks.dimensions.copy()
         avg_dim_lm = sum(dim_lm) / len(dim_lm)
@@ -181,6 +180,7 @@ class FACEIT_OT_GenerateRig(bpy.types.Operator):
             rig.data.layers[i] = True
 
         for i, bone_dict in vert_dict.items():
+            target_point = None
 
             if i in (101, 111):
                 rig.data.use_mirror_x = False
@@ -196,27 +196,53 @@ class FACEIT_OT_GenerateRig(bpy.types.Operator):
 
             # eyes extra positions
             elif i == 101:
-                empty_locator = bpy.data.objects.get('eye_locator_L')
-                if empty_locator:
-                    target_point = empty_locator.location
-                else:
-                    target_point = rig_utils.get_median_position_from_vert_grp('faceit_left_eyeball')
+                if scene.faceit_eye_pivot_options == 'MANUAL':
+                    empty_locator = bpy.data.objects.get('eye_locator_L')
+                    if empty_locator:
+                        target_point = empty_locator.location
+                elif scene.faceit_eye_pivot_options == 'EYE_GEO':
+                    eye_obj = vg_utils.get_objects_with_vertex_group("faceit_left_eyeball")
+                    if eye_obj:
+                        vertex_locations = rig_utils.get_evaluated_vertex_group_positions(
+                            eye_obj, "faceit_left_eyeball")
+                        if vertex_locations:
+                            bounds = rig_utils.get_bounds_from_locations(vertex_locations, 'z')
+                            target_point = futils.get_median_pos(bounds)
                     if not target_point:
                         self.report({'WARNING'}, 'could not find left Eyeball, define vertex group in Setup panel first!')
                         rig_create_warning = True
-
-                    # if target_point
-            elif i == 111:
-                empty_locator = bpy.data.objects.get('eye_locator_R')
-                if empty_locator:
-                    target_point = empty_locator.location
                 else:
-                    target_point = rig_utils.get_median_position_from_vert_grp('faceit_right_eyeball')
+                    body_rig = scene.faceit_body_armature
+                    if body_rig:
+                        eye_bone = body_rig.data.bones.get(scene.faceit_anime_ref_eyebone_l)
+                        if eye_bone:
+                            target_point = eye_bone.matrix_local.to_4x4().to_translation()
+                    # if target_point
+
+            elif i == 111:
+                if scene.faceit_eye_pivot_options == 'MANUAL':
+                    empty_locator = bpy.data.objects.get('eye_locator_R')
+                    if empty_locator:
+                        target_point = empty_locator.location
+                elif scene.faceit_eye_pivot_options == 'EYE_GEO':
+                    eye_obj = vg_utils.get_objects_with_vertex_group("faceit_right_eyeball")
+                    if eye_obj:
+                        vertex_locations = rig_utils.get_evaluated_vertex_group_positions(
+                            eye_obj, "faceit_right_eyeball")
+                        if vertex_locations:
+                            bounds = rig_utils.get_bounds_from_locations(vertex_locations, 'z')
+                            target_point = futils.get_median_pos(bounds)
                     if not target_point:
                         self.report(
                             {'WARNING'},
                             'could not find right Eyeball, define vertex group in Setup panel first!')
                         rig_create_warning = True
+                else:
+                    body_rig = scene.faceit_body_armature
+                    if body_rig:
+                        eye_bone = body_rig.data.bones.get(scene.faceit_anime_ref_eyebone_r)
+                        if eye_bone:
+                            target_point = eye_bone.matrix_local.to_4x4().to_translation()
 
             # jaw extra positions
             elif i == 102:
@@ -224,8 +250,15 @@ class FACEIT_OT_GenerateRig(bpy.types.Operator):
                 if empty_locator:
                     target_point = empty_locator.location
                 else:
-                    target_point = w_mat @ edit_bones['jaw.L'].head
-                    target_point.x = 0
+                    jaw_L = edit_bones.get('jaw.L').head
+                    jaw_R = edit_bones.get('jaw.R').head
+                    target_point = w_mat @ futils.get_median_pos([jaw_L, jaw_R])
+                    # target_point = w_mat @ edit_bones['jaw.L'].head
+                    # target_point.x = 0
+            elif i == 109:
+                jaw_L = edit_bones.get('jaw.L').head
+                jaw_R = edit_bones.get('jaw.R').head
+                target_point = w_mat @ futils.get_median_pos([jaw_L, jaw_R])
 
             # nose extra positions
             elif i == 103:
@@ -249,10 +282,19 @@ class FACEIT_OT_GenerateRig(bpy.types.Operator):
                 if empty_locator:
                     target_point = empty_locator.location
                 else:
-                    target_point = rig_utils.get_median_position_from_vert_grp('faceit_upper_teeth')
-                    if target_point:
-                        target_point.x = 0
-
+                    upper_teeth_obj = vg_utils.get_objects_with_vertex_group("faceit_upper_teeth")
+                    if upper_teeth_obj:
+                        vertex_locations = rig_utils.get_evaluated_vertex_group_positions(
+                            upper_teeth_obj, "faceit_upper_teeth")
+                        if vertex_locations:
+                            # target_point = max(vertex_locations, key=attrgetter('y'))
+                            bounds = rig_utils.get_bounds_from_locations(vertex_locations, 'y')
+                            target_point = futils.get_median_pos(bounds)
+                            if scene.faceit_asymmetric:
+                                bounds = rig_utils.get_bounds_from_locations(vertex_locations, 'x')
+                                target_point.x = futils.get_median_pos(bounds).x
+                            else:
+                                target_point.x = 0
                 if not target_point:
                     self.report(
                         {'WARNING'},
@@ -267,10 +309,18 @@ class FACEIT_OT_GenerateRig(bpy.types.Operator):
                 if empty_locator:
                     target_point = empty_locator.location
                 else:
-                    target_point = rig_utils.get_median_position_from_vert_grp('faceit_lower_teeth')
-                    if target_point:
-                        target_point.x = 0
-
+                    lower_teeth_obj = vg_utils.get_objects_with_vertex_group("faceit_lower_teeth")
+                    if lower_teeth_obj:
+                        vertex_locations = rig_utils.get_evaluated_vertex_group_positions(
+                            lower_teeth_obj, "faceit_lower_teeth")
+                        if vertex_locations:
+                            bounds = rig_utils.get_bounds_from_locations(vertex_locations, 'y')
+                            target_point = futils.get_median_pos(bounds)
+                            if scene.faceit_asymmetric:
+                                bounds = rig_utils.get_bounds_from_locations(vertex_locations, 'x')
+                                target_point.x = futils.get_median_pos(bounds).x
+                            else:
+                                target_point.x = 0
                 if not target_point:
                     self.report(
                         {'WARNING'},
@@ -282,12 +332,6 @@ class FACEIT_OT_GenerateRig(bpy.types.Operator):
                     continue
             elif i == 108:
                 continue
-            elif i == 109:
-                # Get position between jaw rear
-                jaw_L = edit_bones.get('jaw.L').head
-                jaw_R = edit_bones.get('jaw.R').head
-                target_point = w_mat @ futils.get_median_pos([jaw_L, jaw_R])
-
             ############# Matching ##############
             if target_point:
                 # all - translates head and tail by vector to target_point
@@ -296,24 +340,65 @@ class FACEIT_OT_GenerateRig(bpy.types.Operator):
                     l_point = l_mat @ target_point
                     vec = l_point - bone.head
                     bone.translate(vec)
-
                 # head - translates head to target_point
                 for b in bone_dict['head']:
                     bone = edit_bones[b]
                     bone.head = l_mat @ target_point
-
                 # tail - translates tail to target_point
                 for b in bone_dict['tail']:
                     bone = edit_bones[b]
                     bone.tail = l_mat @ target_point
-
         # apply same offset to all tongue bones
-        tip_tongue = rig_utils.get_median_position_from_vert_grp('faceit_tongue')
-        if tip_tongue:
-            vec = l_mat @ tip_tongue - edit_bones['tongue'].head
-            for b in vert_dict[108]['all']:
-                bone = edit_bones[b]
-                bone.translate(vec)
+        tongue_obj = vg_utils.get_objects_with_vertex_group("faceit_tongue")
+        if tongue_obj:
+            tongue_bones = [edit_bones[b] for b in vert_dict[108]["all"]]
+            vertex_locations = rig_utils.get_evaluated_vertex_group_positions(tongue_obj, "faceit_tongue")
+            if vertex_locations:
+                target_point = min(vertex_locations, key=attrgetter('y'))
+                if scene.faceit_asymmetric:
+                    bounds = rig_utils.get_bounds_from_locations(vertex_locations, 'x')
+                    target_point.x = futils.get_median_pos(bounds).x
+                else:
+                    target_point.x = 0
+                vec = l_mat @ target_point - edit_bones["tongue"].head
+                for b in tongue_bones:
+                    b.translate(vec)
+                # squash/stretch bones into tongue geometry range (bounds)
+                bone_locations = [b.head for b in tongue_bones]
+                b_max_y, b_min_y = rig_utils.get_bounds_from_locations(bone_locations, 'y')
+                v_max_y, v_min_y = (l_mat @ v for v in rig_utils.get_bounds_from_locations(vertex_locations, 'y'))
+                old_range = b_max_y.y - b_min_y.y
+                new_range = v_max_y.y - v_min_y.y
+                new_range *= .9
+                for b in tongue_bones:
+                    old_value = b.head.y
+                    new_value = (((old_value - b_min_y.y) * new_range) / old_range) + v_min_y.y
+                    add_y = new_value - old_value
+                    b.head.y += add_y
+                    b.tail.y += add_y
+                # b_max_z, b_min_z = rig_utils.get_bounds_from_locations(bone_locations, 'z')
+                # v_max_z, v_min_z = (l_mat @ v for v in rig_utils.get_bounds_from_locations(vertex_locations, 'z'))
+                # old_range = b_max_z.z - b_min_z.z
+                # new_range = v_max_z.z - v_min_z.z
+                # for b in tongue_bones:
+                #     # print(vert_dict[112].values())
+                #     # if any(b.name in bl for bl in vert_dict[112].values()):
+                #     if b.name in ['tongue', 'DEF-tongue']:
+                #         continue
+                #     old_value = b.head.z
+                #     new_value = (((old_value - b_min_z.z) * new_range) / old_range) + v_min_z.z
+                #     add_z = new_value - old_value
+                #     b.head.z += add_z
+                #     if b.name == 'tongue_master':
+                #         continue
+                #     b.tail.z += add_z
+                # move tails to repective bones.
+                for i in range(112, 116):
+                    b_dict = vert_dict[i]
+                    pos = edit_bones[b_dict['all'][0]].head
+                    for b in b_dict['tail']:
+                        b = edit_bones[b]
+                        b.tail = pos
         else:
             self.report(
                 {'WARNING'},
@@ -326,42 +411,43 @@ class FACEIT_OT_GenerateRig(bpy.types.Operator):
         # translate the extra eye bone to the proper location
         eyes = edit_bones['eyes']
         eyes_length = Vector((0, 0, eyes.length))
-
         eye_master_L = edit_bones['master_eye.L']
         eye_master_R = edit_bones['master_eye.R']
-
         vec = eye_master_L.tail - edit_bones['MCH-eye.L.001'].head
         edit_bones['MCH-eye.L.001'].translate(vec)
         vec = eye_master_R.tail - edit_bones['MCH-eye.R.001'].head
         edit_bones['MCH-eye.R.001'].translate(vec)
-
+        # position eye target bones
         eye_target_L = edit_bones['eye.L']
         eye_target_R = edit_bones['eye.R']
-
         eyes.head[2] = eye_master_L.head[2]
         eyes.tail = eyes.head + eyes_length
-
         eye_target_L.head[2] = eye_master_L.head[2]
         eye_target_L.tail = eye_target_L.head + eyes_length
-
         eye_target_R.head[2] = eye_master_R.head[2]
         eye_target_R.tail = eye_target_R.head + eyes_length
-
-        # orient all jaw bones for jaw_master.tail (chin)
+        # Orient all jaw bones to chin / Y Axis.
+        bpy.ops.armature.select_all(action='DESELECT')
         jaw_master = edit_bones['jaw_master']
-        jaw_master.tail = edit_bones['chin'].head
+        chin_bone = edit_bones['chin']
+        jaw_master.tail = chin_bone.head
         for bone in vert_dict[102]['all']:
-            if bone != jaw_master.name:
-                edit_bones[bone].align_orientation(jaw_master)
-
+            edit_bone = edit_bones[bone]
+            edit_bone.head.x = edit_bones['chin'].head.x
+            if edit_bone is not jaw_master:
+                edit_bone.align_orientation(jaw_master)
+            edit_bone.select = True
+        bpy.ops.armature.calculate_roll(type='POS_X')
         bpy.ops.object.mode_set(mode='OBJECT')
         if rig.scale != Vector((1, 1, 1)):
-            bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+            bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
 
         rig_utils.reset_stretch(rig_obj=rig)
 
         bpy.ops.object.mode_set(mode='POSE')
         bpy.ops.pose.armature_apply()
+        rig_utils.set_lid_follow_constraints(rig, "L")
+        rig_utils.set_lid_follow_constraints(rig, "R")
         bpy.ops.object.mode_set(mode='OBJECT')
 
         # restore the layer visibillity to its original state
@@ -400,7 +486,6 @@ class FACEIT_OT_GenerateRig(bpy.types.Operator):
                                     sk.mute = False
                                 else:
                                     obj.shape_key_remove(sk)
-
                         if len(obj.data.shape_keys.key_blocks) == 1:
                             obj.shape_key_clear()
                         else:
@@ -408,7 +493,6 @@ class FACEIT_OT_GenerateRig(bpy.types.Operator):
                                 if not obj.data.shape_keys.animation_data:
                                     obj.data.shape_keys.animation_data_create()
                                 obj.data.shape_keys.animation_data.action = corrective_sk_action
-
                 scene.faceit_corrective_sk_restorable = False
         else:
             scene.faceit_expression_list.clear()
@@ -477,7 +561,7 @@ class FACEIT_OT_ReconnectRig(bpy.types.Operator):
 
         faceit_objects = futils.get_faceit_objects_list()
 
-        rig_utils.reset_pose(rig)
+        reset_pose(rig)
 
         _reconnected_rig = False
         for obj in faceit_objects:
@@ -511,45 +595,187 @@ class FACEIT_OT_ReconnectRig(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class FACEIT_OT_EditLocatorEmpties(bpy.types.Operator):
-    '''	Edit Locator Empties visibility or remove'''
-    bl_idname = 'faceit.edit_locator_empties'
-    bl_label = 'Show Locator Empties'
+def create_empty(name, size=1.0):
+    obj = bpy.data.objects.new(name, None)
+    obj.empty_display_type = 'PLAIN_AXES'
+    obj.empty_display_size = size
+    obj.show_name = True
+    obj.show_in_front = True
+    obj.lock_rotation[0] = True
+    obj.lock_rotation[1] = True
+    obj.lock_rotation[2] = True
+    return obj
+
+
+def get_pivot_location_from_vgroup(vgroup_name, grp_prop):
+    ''' Get the location of the pivot from the vertex group'''
+    pos = Vector((0, 0, 0))
+    objects = grp_prop.get_assigned_objects()
+    # Get the global vertex positions of all verts in vgroup in all objects
+    global_vs = []
+    for obj in objects:
+        obj_vs = vg_utils.get_verts_in_vgroup(obj, vgroup_name)
+        global_vs.extend([obj.matrix_world @ v.co for v in obj_vs])
+    bounds = rig_utils.get_bounds_from_locations(global_vs, 'z')
+    pos = futils.get_median_pos(bounds)
+    return pos
+
+
+def get_eye_locator_positions(side='left'):
+    """Get the location of the eye locators
+    eye_pivot_option: 'EYE_GEO','BONE_PIVOT','MANUAL'
+    """
+    scene = bpy.context.scene
+    vgroup_props = scene.faceit_vertex_groups
+    pos = None
+    if scene.faceit_eye_pivot_options == 'EYE_GEO':
+        if scene.faceit_pivot_from_eye_deform_group:
+            left_vgroup_name = f'faceit_{side}_eyes_other'
+        else:
+            left_vgroup_name = f'faceit_{side}_eyeball'
+
+        grp_prop = vgroup_props.get(left_vgroup_name)
+        if not grp_prop.is_assigned:
+            print("No objects assigned to vertex group: {}".format(left_vgroup_name))
+        else:
+            pos = get_pivot_location_from_vgroup(left_vgroup_name, grp_prop)
+            return pos
+    elif scene.faceit_eye_pivot_options == 'BONE_PIVOT':
+        ref_rig = scene.faceit_pivot_ref_armature
+        if ref_rig:
+            eye_bone = ref_rig.data.bones.get(scene.faceit_anime_ref_eyebone_l if side ==
+                                              'left' else scene.faceit_anime_ref_eyebone_r)
+            if eye_bone:
+                pos = eye_bone.matrix_local.to_4x4().to_translation()
+                return pos
+    elif scene.faceit_eye_pivot_options == 'MANUAL':
+        pass
+
+
+def update_eye_locator_position(mirror=False):
+    left_pos = get_eye_locator_positions('left')
+    right_pos = get_eye_locator_positions('right')
+    if mirror:
+        if left_pos and not right_pos:
+            right_pos = left_pos.copy()
+            right_pos.x *= -1
+        if right_pos and not left_pos:
+            left_pos = right_pos.copy()
+            left_pos.x *= -1
+    return left_pos, right_pos
+
+
+def get_locator_names(target_locators='ALL'):
+    """Get the eye locator empties
+    target_locators: string in ('ALL','EYE','TEETH','JAW')
+    """
+    if target_locators == 'ALL':
+        locator_names = lm_data.LOCATOR_NAMES
+    elif target_locators == 'EYE':
+        locator_names = lm_data.LOCATOR_NAMES[:2]
+    elif target_locators == 'TEETH':
+        locator_names = lm_data.LOCATOR_NAMES[2:4]
+    else:
+        locator_names = lm_data.LOCATOR_NAMES[4:]
+    return locator_names
+
+
+def get_locator_empties(target_locators='ALL', create=True):
+    """Get the eye locator empties
+    target_locators: string in ('ALL','EYE','TEETH','JAW')
+    """
+    locator_names = get_locator_names(target_locators)
+    lm_obj = futils.get_object('facial_landmarks')
+    if create:
+        if lm_obj:
+            _lm_size = lm_obj.dimensions.x / 8
+        else:
+            _lm_size = 0.01
+    locators = []
+    for name in locator_names:
+        loc_empty = bpy.data.objects.get(name)
+        if loc_empty:
+            if loc_empty.name not in bpy.context.scene.objects:
+                bpy.data.objects.remove(loc_empty)
+                loc_empty = None
+        if not loc_empty and create:
+            faceit_collection = futils.get_faceit_collection(force_access=True, create=True)
+            loc_empty = create_empty(name, _lm_size)
+            faceit_collection.objects.link(loc_empty)
+        if loc_empty:
+            locators.append(loc_empty)
+            # check if the locator object is animated
+            if loc_empty.animation_data:
+                loc_empty.animation_data_clear()
+    return locators
+
+
+def set_locator_hidden_state(target_locators='ALL', hide=True):
+    locators = get_locator_empties(target_locators, create=False)
+    for obj in locators:
+        futils.set_hide_obj(obj, hide)
+
+
+class FACEIT_OT_UpdateEyeLocators(bpy.types.Operator):
+    '''Create the Eye Locator Empties'''
+    bl_idname = 'faceit.update_eye_locators'
+    bl_label = 'Update Eye Locators'
     bl_options = {'UNDO', 'INTERNAL'}
 
-    remove: BoolProperty(
-        name='Remove All',
+    set_active_object: BoolProperty(
+        name='Set Active Object',
+        description='Set the active object to the eye locator',
         default=False,
         options={'SKIP_SAVE'}
     )
 
-    hide_value: BoolProperty(
-        name='Hide/Show',
-        default=False,
-        options={'SKIP_SAVE'}
-    )
-
-    @classmethod
-    def poll(cls, context):
-        return True
-        # return any([n in bpy.data.objects for n in lm_utils.locators])
+    def invoke(self, context, event):
+        self.set_active_object = True
+        return self.execute(context)
 
     def execute(self, context):
-
-        for n in lm_data.LOCATOR_NAMES:
-            loc_obj = futils.get_object(n)
-            if loc_obj:
-                if self.remove:
-                    bpy.data.objects.remove(loc_obj, do_unlink=True)
-                    continue
-                futils.set_hidden_state_object(loc_obj, self.hide_value, self.hide_value)
-                # loc_obj.hide_viewport = self.hide_value
-
-        if self.remove:
-            context.scene.show_locator_empties = True
+        auto_key_setting = context.scene.tool_settings.use_keyframe_insert_auto
+        context.scene.tool_settings.use_keyframe_insert_auto = False
+        scene = context.scene
+        left_eye, right_eye = get_locator_empties(target_locators='EYE')
+        if scene.faceit_eye_pivot_options == 'MANUAL':
+            futils.set_hide_obj(left_eye, False)
+            futils.set_hide_obj(right_eye, False)
+            left_eye.lock_location = (False, False, False)
+            right_eye.lock_location = (False, False, False)
+            left_eye.hide_select = False
+            right_eye.hide_select = False
+            if self.set_active_object:
+                if context.mode != 'OBJECT':
+                    bpy.ops.object.mode_set(mode='OBJECT')
+                futils.clear_object_selection()
+                futils.set_active_object(left_eye)
+                futils.set_active_object(right_eye)
+                # focus
+                override = context.copy()
+                area = context.area
+                override['region'] = area.regions[-1]
+                bpy.ops.view3d.view_selected(override)
+            else:
+                left_eye.select_set(state=True)
+                right_eye.select_set(state=True)
+            self.report({'INFO'}, 'Eye Locators Updated. Transforms unlocked.')
         else:
-            context.scene.show_locator_empties = not self.hide_value
-
+            futils.set_hide_obj(left_eye, not scene.faceit_show_eye_locators)
+            futils.set_hide_obj(right_eye, not scene.faceit_show_eye_locators)
+            left_pos, right_pos = update_eye_locator_position(mirror=not scene.faceit_asymmetric)
+            if left_pos:
+                left_eye.location = left_pos
+            if right_pos:
+                right_eye.location = right_pos
+            left_eye.lock_location = (True, True, True)
+            right_eye.lock_location = (True, True, True)
+            left_eye.select_set(state=True)
+            right_eye.select_set(state=True)
+            self.report({'INFO'}, 'Eye Locators Updated. Locked Transforms.')
+            # left_eye.hide_select = True
+            # right_eye.hide_select = True
+        context.scene.tool_settings.use_keyframe_insert_auto = auto_key_setting
         return {'FINISHED'}
 
 
@@ -585,14 +811,11 @@ class FACEIT_OT_GenerateLocatorEmpties(bpy.types.Operator):
     def invoke(self, context, event):
         if context.scene.faceit_asymmetric:
             self.jaw_locator = False
-        # else:
-        #     self.jaw_locator = True
         return context.window_manager.invoke_props_dialog(self)
 
     @classmethod
     def poll(cls, context):
         return context.mode == 'OBJECT'
-        # return True
 
     def draw(self, context):
         layout = self.layout
@@ -605,15 +828,15 @@ class FACEIT_OT_GenerateLocatorEmpties(bpy.types.Operator):
     def execute(self, context):
         scene = context.scene
         lm_obj = futils.get_object('facial_landmarks')
-        faceit_collection = futils.get_faceit_collection(force_access=True, create=False)
+        faceit_collection = futils.get_faceit_collection(force_access=True, create=True)
         if not faceit_collection:
-            return
+            self.report({'ERROR'}, "Faceit Collection not found.")
+            return {'CANCELLED'}
         if lm_obj:
             _lm_size = lm_obj.dimensions.x / 8
         else:
             _lm_size = 0.01
         faceit_objects = futils.get_faceit_objects_list()
-
         # Remove Empties that exist already
         bpy.ops.faceit.edit_locator_empties('EXEC_DEFAULT', remove=True)
 
@@ -633,112 +856,50 @@ class FACEIT_OT_GenerateLocatorEmpties(bpy.types.Operator):
             obj.lock_rotation[2] = True
             return obj
 
-        body_rig = None
-        if scene.faceit_use_eye_pivots:
-            body_rig = scene.faceit_body_armature
+        vgroup_props = context.scene.faceit_vertex_groups
 
         if self.eye_locators:
-            # ----------------- LEFT EYE LOCATOR --------------------
-            _generated = False
-            if body_rig:
-                eye_L = body_rig.data.bones.get(scene.faceit_anime_ref_eyebone_l)
-                if eye_L:
-                    pos = eye_L.matrix_local.to_4x4().to_translation()
-
-                create_empty('eye_locator_L', pos)
-                _generated = True
-            if not _generated:
-                vgroup_name = 'faceit_left_eyeball'
-                obj = vg_utils.get_objects_with_vertex_group(vgroup_name, objects=faceit_objects)
-                if obj:
-                    # Get vertices
-                    vs = vg_utils.get_verts_in_vgroup(obj, vgroup_name)
-                    global_vs = [obj.matrix_world @ v.co for v in vs]
-
-                    bounds = rig_utils.get_bounds_from_locations(global_vs, 'z')
-                    pos = futils.get_median_pos(bounds)
-                    create_empty('eye_locator_L', pos)
-
-                else:
-                    self.report({'WARNING'}, 'Can\'t find {} vertex group. Please register it first.'.format(vgroup_name))
-
-            # ----------------- RIGHT EYE LOCATOR --------------------
-
-            pos = None
-            _generated = False
-            if body_rig:
-                eye_R = body_rig.data.bones.get(scene.faceit_anime_ref_eyebone_r)
-                if eye_R:
-                    pos = eye_R.matrix_local.to_4x4().to_translation()
-                create_empty('eye_locator_R', pos)
-                _generated = True
-            if not _generated:
-                vgroup_name = 'faceit_right_eyeball'
-                obj = vg_utils.get_objects_with_vertex_group(vgroup_name, objects=faceit_objects)
-                if obj:
-                    # Get vertices
-                    vs = vg_utils.get_verts_in_vgroup(obj, vgroup_name)
-                    global_vs = [obj.matrix_world @ v.co for v in vs]
-
-                    bounds = rig_utils.get_bounds_from_locations(global_vs, 'z')
-                    pos = futils.get_median_pos(bounds)
-                    create_empty('eye_locator_R', pos)
-                else:
-                    self.report({'WARNING'}, 'Can\'t find {} vertex group. Please register it first.'.format(vgroup_name))
-
+            pos = get_eye_locator_positions(side='left')
+            create_empty('eye_locator_L', pos)
+            pos = get_eye_locator_positions(side='right')
+            create_empty('eye_locator_R', pos)
         if self.teeth_locators:
             # ----------------- TEETH UPPER LOCATOR --------------------
-
             vgroup_name = 'faceit_upper_teeth'
             obj = vg_utils.get_objects_with_vertex_group(vgroup_name, objects=faceit_objects)
             if obj:
                 # Get vertices
                 vs = vg_utils.get_verts_in_vgroup(obj, vgroup_name)
                 global_vs = [obj.matrix_world @ v.co for v in vs]
-
                 bounds = rig_utils.get_bounds_from_locations(global_vs, 'z')
                 bounds.append(min(global_vs, key=attrgetter('y')))
-
                 pos = futils.get_median_pos(bounds)
                 pos.x = 0
-
                 create_empty('teeth_upper_locator', pos)
             else:
                 self.report({'WARNING'}, 'Can\'t find {} vertex group. Please register it first.'.format(vgroup_name))
-
             # ----------------- TEETH UPPER LOCATOR --------------------
-
             vgroup_name = 'faceit_lower_teeth'
             obj = vg_utils.get_objects_with_vertex_group(vgroup_name, objects=faceit_objects)
             if obj:
                 # Get vertices
                 vs = vg_utils.get_verts_in_vgroup(obj, vgroup_name)
                 global_vs = [obj.matrix_world @ v.co for v in vs]
-
                 bounds = rig_utils.get_bounds_from_locations(global_vs, 'z')
                 bounds.append(min(global_vs, key=attrgetter('y')))
-
                 pos = futils.get_median_pos(bounds)
                 pos.x = 0
-
                 create_empty('teeth_lower_locator', pos)
             else:
                 self.report({'WARNING'}, 'Can\'t find {} vertex group. Please register it first.'.format(vgroup_name))
-
         if self.jaw_locator:
-            # if context.scene.faceit_asymmetric:
-            #     l_id = 25
-            #     # r_id = 24
-            # else:
             if not lm_obj:
                 self.report({'WARNING'}, 'Can\'t find facial landmarks object. Could not create Jaw Locator.')
-                # return {'CANCELLED'}
             id = 22
             pos = lm_obj.matrix_world @ lm_obj.data.vertices[id].co
             pos.x = 0
             empty = create_empty('jaw_locator', pos)
             empty.lock_location[0] = True
-
             # obj = bpy.data.objects.new("jaw_locator", None)
             # obj.empty_display_type = 'PLAIN_AXES'
             # faceit_collection.objects.link(obj)
@@ -797,3 +958,12 @@ class FACEIT_OT_GenerateLocatorEmpties(bpy.types.Operator):
         #     eye_R_empty.empty_display_size = up_dim  # (up_dim,)*3
 
         return {'FINISHED'}
+
+
+# class FACEIT_OT_ShowEyePivotPositions(bpy.types.Operator):
+#     bl_idname = "faceit.show_eye_pivot_positions"
+#     bl_label = "Show Eye Pivot Positions"
+#     bl_description = "Show Eye Pivot Positions"
+#     bl_options = {'REGISTER', 'UNDO'}
+
+#     def execute(self, context):

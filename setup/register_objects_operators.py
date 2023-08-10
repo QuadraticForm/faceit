@@ -21,10 +21,12 @@ class FACEIT_OT_AddFacialPart(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        obj = context.object
-        if obj is not None:
-            return any([obj.type == 'MESH' for obj in context.selected_objects]) and \
-                (obj.name not in context.scene.faceit_face_objects or len(context.selected_objects) > 1)
+        if any([obj.type == 'MESH' for obj in context.selected_objects]):
+            if len(context.selected_objects) > 1:
+                return True
+            obj = context.object
+            if obj is not None:
+                return (obj.name not in context.scene.faceit_face_objects)
 
     def execute(self, context):
         scene = context.scene

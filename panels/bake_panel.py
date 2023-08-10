@@ -5,7 +5,7 @@ from mathutils import Vector
 
 from .ui import FACEIT_PT_Base
 from ..core.retarget_list_utils import get_index_of_parent_collection_item
-from ..core.faceit_utils import is_other_rigify_armature
+from ..core.faceit_utils import get_faceit_armature, using_rigify_armature
 from ..panels.draw_utils import draw_text_block
 
 
@@ -49,21 +49,13 @@ class FACEIT_PT_BakeExpressions(FACEIT_PT_BaseBake, Panel):
         return super().poll(context)
 
     def draw(self, context):
-
-        scene = context.scene
-        # rig = futils.get_faceit_armature()
         layout = self.layout
-
         col = layout.column(align=True)
-
         col.use_property_split = True
         col.use_property_decorate = False
-
         # row = col.row()
         # row.label(text='Bake and Finalize')
-
         # draw_utils.draw_web_link(row, 'https://faceit-doc.readthedocs.io/en/latest/bake/')
-
         if context.scene.faceit_shapes_generated:
             row = col.row()
             row.label(text="Return")
@@ -90,37 +82,22 @@ class FACEIT_PT_ShapeKeyUtils(FACEIT_PT_BaseBake, Panel):
 
         layout = self.layout
         scene = context.scene
-
         col = layout.column()
-
         row = col.row(align=True)
-        row.label(text='Set Shape Key Slider Range')
+        row.prop(context.preferences.addons["faceit"].preferences, 'dynamic_shape_key_ranges', icon='SHAPEKEY_DATA')
 
-        row = col.row()
-        sub = row.column(align=True)
-        # sk_options = scene.faceit_shape_key_options
-        sub.prop(scene, 'faceit_shape_key_slider_min', text='Range Min')
-        sub.prop(scene, 'faceit_shape_key_slider_max', text='Max')
+        if not context.preferences.addons["faceit"].preferences.dynamic_shape_key_ranges:
+            row = col.row(align=True)
+            row.label(text='Set Shape Key Slider Range')
 
-        row = col.row(align=True)
-        row.operator('faceit.set_shape_key_range')
+            row = col.row()
+            sub = row.column(align=True)
+            # sk_options = scene.faceit_shape_key_options
+            sub.prop(scene, 'faceit_shape_key_slider_min', text='Range Min')
+            sub.prop(scene, 'faceit_shape_key_slider_max', text='Max')
 
-
-class FACEIT_PT_Finalize(FACEIT_PT_BaseBake, Panel):
-    bl_label = 'Clean Up (Destructive)'
-    bl_idname = 'FACEIT_PT_Finalize'
-    faceit_predecessor = 'FACEIT_PT_Other'
-
-    @classmethod
-    def poll(cls, context):
-        return super().poll(context)
-
-    def draw(self, context):
-        layout = self.layout
-        row = layout.row(align=True)
-        row.operator('faceit.cleanup_scene', icon='TRASH')
-        row = layout.row(align=True)
-        row.operator('faceit.cleanup_objects', text='Clean Up Objects', icon='TRASH')
+            row = col.row(align=True)
+            row.operator('faceit.set_shape_key_range')
 
 
 class FACEIT_PT_RigUtils(FACEIT_PT_BaseBake, Panel):
@@ -130,29 +107,26 @@ class FACEIT_PT_RigUtils(FACEIT_PT_BaseBake, Panel):
 
     @classmethod
     def poll(cls, context):
-        return super().poll(context)  # and context.scene.faceit_armature
+        if super().poll(context):  # and context.scene.faceit_armature
+            return not using_rigify_armature()
 
     def draw(self, context):
         layout = self.layout
         col = layout.column()
-
         scene = context.scene
         row = col.row()
         row.prop(scene, 'faceit_armature')
-
-        rig = scene.faceit_armature
-
-        if rig and not is_other_rigify_armature():
+        rig = get_faceit_armature(force_original=True)
+        if rig:
             row = col.row(align=True)
             row.operator('faceit.unhide_rig', icon='HIDE_ON')
             row = col.row(align=True)
             row.operator('faceit.reconnect_rig', icon='LINKED')
             body_rig = scene.faceit_body_armature
-            if not rig is body_rig:
+            if rig is not body_rig:
                 col = col.box()
                 row = col.row(align=False)
                 row.label(text='Join to Body Armature')
-
                 row = col.row(align=True)
                 row.prop(scene, 'faceit_body_armature', text="Body Rig")
                 if body_rig:
@@ -180,10 +154,7 @@ class FACEIT_PT_Other(FACEIT_PT_BaseBake, Panel):
 
     def draw(self, context):
         layout = self.layout
-
         col = layout.column(align=True)
-        col.use_property_decorate = False
-
         if context.object:
             row = col.row(align=True)
             row.label(text='Apply Modifiers')
@@ -195,19 +166,22 @@ class FACEIT_PT_Other(FACEIT_PT_BaseBake, Panel):
             row = col.row(align=True)
             row.operator('faceit.apply_shape_keys_to_mesh', icon='SHAPEKEY_DATA').obj_name = context.object.name
 
-        row = col.row()
-        row.label(text='Vertex Size Defaults')
-        prefs = context.preferences.addons['faceit'].preferences
-        row = col.row(align=True)
-        row.prop(prefs, 'use_vertex_size_scaling', icon='PROP_OFF')
-        if prefs.use_vertex_size_scaling:
-            row = col.row(align=True)
-            row.prop(context.preferences.themes[0].view_3d, 'vertex_size', text="Theme Vertex Size")
-            col.use_property_split = True
-            row = col.row(align=True)
-            row.prop(prefs, 'default_vertex_size')
-            row = col.row(align=True)
-            row.prop(prefs, 'landmarks_vertex_size')
+
+class FACEIT_PT_Finalize(FACEIT_PT_BaseBake, Panel):
+    bl_label = 'Clean Up (Destructive)'
+    bl_idname = 'FACEIT_PT_Finalize'
+    faceit_predecessor = 'FACEIT_PT_Other'
+
+    @classmethod
+    def poll(cls, context):
+        return super().poll(context)
+
+    def draw(self, context):
+        layout = self.layout
+        row = layout.row(align=True)
+        row.operator('faceit.cleanup_scene', icon='TRASH')
+        row = layout.row(align=True)
+        row.operator('faceit.cleanup_objects', text='Clean Up Objects', icon='TRASH')
 
 
 class FACE_OBJECTS_MODIFIERS_UL_list(bpy.types.UIList):

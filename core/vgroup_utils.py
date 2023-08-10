@@ -194,7 +194,6 @@ def get_faceit_vertex_grps(obj, groups_filter=None):
     if len(obj.vertex_groups) <= 0:
         return []
     faceit_groups = []
-
     for grp in obj.vertex_groups:
         if groups_filter:
             if any((i == grp.name) for i in groups_filter):
@@ -202,7 +201,6 @@ def get_faceit_vertex_grps(obj, groups_filter=None):
         else:
             if 'faceit' in grp.name:
                 faceit_groups.append(grp.name)
-
     return faceit_groups
 
 
@@ -214,7 +212,7 @@ def get_objects_with_vertex_group(vgroup_name, objects=None, get_all=False):
     # return only the first occurence of vgroup in objects
     if not get_all:
         try:
-            obj = next(iter([obj for obj in objects if obj.vertex_groups.get(vgroup_name)]))
+            obj = next(iter([obj for obj in objects if vgroup_name in obj.vertex_groups]))
             return obj
         except StopIteration:
             return

@@ -29,7 +29,6 @@ class FACEIT_PT_RetargetFBX(FACEIT_PT_BaseSub, bpy.types.Panel):
 
     # box_retarget_fbx = layout.box()
     # row = box_retarget_fbx.row()
-    # draw_utils.draw_panel_dropdown_expander(row, retarget_fbx_props, 'expand_ui', 'Retarget FBX')
     # draw_utils.draw_web_link(row, 'https://faceit-doc.readthedocs.io/en/latest/fbx_retargeting/')
 
     # if retarget_fbx_props.expand_ui:

@@ -13,12 +13,6 @@ Use the manual Mirror tools instead of the Mirror modifier',
         default=False,
     )
 
-    Scene.show_locator_empties = BoolProperty(
-        name='locator empties active',
-        default=False
-    )
-
 
 def unregister():
     del Scene.faceit_asymmetric
-    del Scene.show_locator_empties

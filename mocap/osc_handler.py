@@ -4,7 +4,7 @@ from .osc_receiver import osc_queue
 from .osc_operators import live_animator, receiver
 
 update_queries = 60
-queries_per_second = 120
+queries_per_second = 200
 
 
 def process_osc_queue():

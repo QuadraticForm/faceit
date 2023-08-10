@@ -159,11 +159,16 @@ def set_bake_modifier_item(mod, obj_item=None, set_bake=False, is_faceit_mod=Fal
             set_bake_modifier_properties(mod, mod_item)
 
 
-def get_bake_modifiers(objects):
+def populate_bake_modifier_items(objects):
+    '''Populates the bake modifier list for all passed objects.
+    @objects: Should be a list of objects in faceit_face_objects.
+    '''
     for obj in objects:
         obj_item = bpy.context.scene.faceit_face_objects.get(obj.name)
         if obj_item is None:
             continue
+        bake_mods = []
+        faceit_mods = []
         if not obj_item.modifiers:
             arma_mod = get_faceit_armature_modifier(obj, force_original=False)
             if arma_mod:
@@ -178,96 +183,98 @@ def get_bake_modifiers(objects):
 
 
 def restore_bake_modifiers(obj, modifier_list):
+    '''Restores the bake modifiers for an object.'''
     for mod_item in modifier_list:
-        if mod_item.bake:
-            mod = obj.modifiers.get(mod_item.name)
-            if mod:
-                mod.show_viewport = True
-            elif mod_item.recreate:
-                # Create a new modifier with same settings
-                mod = obj.modifiers.new(mod_item.name, mod_item.type)
-                mod.show_viewport = mod_item.show_viewport
-                mod.show_render = mod_item.show_render
-                mod.show_in_editmode = mod_item.show_in_editmode
-                mod.show_on_cage = mod_item.show_on_cage
+        if not mod_item.bake:
+            continue
+        mod = obj.modifiers.get(mod_item.name)
+        if mod:
+            mod.show_viewport = True
+        elif mod_item.recreate:
+            # Create a new modifier with same settings
+            mod = obj.modifiers.new(mod_item.name, mod_item.type)
+            mod.show_viewport = mod_item.show_viewport
+            mod.show_render = mod_item.show_render
+            mod.show_in_editmode = mod_item.show_in_editmode
+            mod.show_on_cage = mod_item.show_on_cage
+            mod.show_expanded = mod_item.show_expanded
+            mod.show_in_editmode = mod_item.show_in_editmode
+            mod.show_in_editmode = mod_item.show_in_editmode
+            if mod_item.type == 'SURFACE_DEFORM':
                 mod.show_expanded = mod_item.show_expanded
-                mod.show_in_editmode = mod_item.show_in_editmode
-                mod.show_in_editmode = mod_item.show_in_editmode
-                if mod_item.type == 'SURFACE_DEFORM':
-                    mod.show_expanded = mod_item.show_expanded
-                    mod.strength = mod_item.strength
-                    mod.target = mod_item.target
-                    mod.use_sparse_bind = mod_item.use_sparse_bind
-                    mod.invert_vertex_group = mod_item.invert_vertex_group
-                    mod.vertex_group = mod_item.vertex_group
-                elif mod_item.type == 'SHRINKWRAP':
-                    mod.target = mod_item.target
-                    mod.offset = mod_item.offset
-                    mod.project_limit = mod_item.project_limit
-                    mod.subsurf_levels = mod_item.subsurf_levels
-                    mod.use_invert_cull = mod_item.use_invert_cull
-                    mod.use_negative_direction = mod_item.use_negative_direction
-                    mod.use_positive_direction = mod_item.use_positive_direction
-                    mod.use_project_x = mod_item.use_project_x
-                    mod.use_project_y = mod_item.use_project_y
-                    mod.use_project_z = mod_item.use_project_z
-                    mod.wrap_method = mod_item.wrap_method
-                    mod.wrap_mode = mod_item.wrap_mode
-                    mod.invert_vertex_group = mod_item.invert_vertex_group
-                    mod.vertex_group = mod_item.vertex_group
-                elif mod.type == 'ARMATURE':
-                    mod.object = mod_item.object
-                    mod.use_bone_envelopes = mod_item.use_bone_envelopes
-                    mod.use_deform_preserve_volume = mod_item.use_deform_preserve_volume
-                    mod.use_multi_modifier = mod_item.use_multi_modifier
-                    mod.use_vertex_groups = mod_item.use_vertex_groups
-                    mod.invert_vertex_group = mod_item.invert_vertex_group
-                    mod.vertex_group = mod_item.vertex_group
-                elif mod.type == 'CORRECTIVE_SMOOTH':
-                    mod.factor = mod_item.factor
-                    mod.iterations = mod_item.iterations
-                    mod.smooth_type = mod_item.smooth_type
-                    mod.scale = mod_item.scale
-                    mod.smooth_type = mod_item.smooth_type
-                    mod.use_only_smooth = mod_item.use_only_smooth
-                    mod.use_pin_boundary = mod_item.use_pin_boundary
-                elif mod.type == 'LATTICE':
-                    mod.object = mod_item.object
-                    mod.vertex_group = mod_item.vertex_group
-                    mod.invert_vertex_group = mod_item.invert_vertex_group
-                    mod.strength = mod_item.strength
-                elif mod.type == 'SMOOTH':
-                    mod.factor = mod_item.factor
-                    mod.iterations = mod_item.iterations
-                    mod.use_x = mod_item.use_x
-                    mod.use_y = mod_item.use_y
-                    mod.use_z = mod_item.use_z
-                    mod.vertex_group = mod_item.vertex_group
-                    mod.invert_vertex_group = mod_item.invert_vertex_group
-                elif mod.type == 'LAPLACIANSMOOTH':
-                    mod.lambda_factor = mod_item.lambda_factor
-                    mod.lambda_border = mod_item.lambda_border
-                    mod.iterations = mod_item.iterations
-                    mod.use_volume_preserve = mod_item.use_volume_preserve
-                    mod.use_normalized = mod_item.use_normalized
-                    mod.use_x = mod_item.use_x
-                    mod.use_y = mod_item.use_y
-                    mod.use_z = mod_item.use_z
-                    mod.vertex_group = mod_item.vertex_group
-                    mod.invert_vertex_group = mod_item.invert_vertex_group
-                if mod.type == 'MESH_DEFORM':
-                    mod.precision = mod_item.precision
-                    mod.object = mod_item.object
-                    mod.is_bound = mod_item.is_bound
-                    mod.use_dynamic_bind = mod_item.use_dynamic_bind
-                    mod.vertex_group = mod_item.vertex_group
-                    mod.invert_vertex_group = mod_item.invert_vertex_group
+                mod.strength = mod_item.strength
+                mod.target = mod_item.target
+                mod.use_sparse_bind = mod_item.use_sparse_bind
+                mod.invert_vertex_group = mod_item.invert_vertex_group
+                mod.vertex_group = mod_item.vertex_group
+            elif mod_item.type == 'SHRINKWRAP':
+                mod.target = mod_item.target
+                mod.offset = mod_item.offset
+                mod.project_limit = mod_item.project_limit
+                mod.subsurf_levels = mod_item.subsurf_levels
+                mod.use_invert_cull = mod_item.use_invert_cull
+                mod.use_negative_direction = mod_item.use_negative_direction
+                mod.use_positive_direction = mod_item.use_positive_direction
+                mod.use_project_x = mod_item.use_project_x
+                mod.use_project_y = mod_item.use_project_y
+                mod.use_project_z = mod_item.use_project_z
+                mod.wrap_method = mod_item.wrap_method
+                mod.wrap_mode = mod_item.wrap_mode
+                mod.invert_vertex_group = mod_item.invert_vertex_group
+                mod.vertex_group = mod_item.vertex_group
+            elif mod.type == 'ARMATURE':
+                mod.object = mod_item.object
+                mod.use_bone_envelopes = mod_item.use_bone_envelopes
+                mod.use_deform_preserve_volume = mod_item.use_deform_preserve_volume
+                mod.use_multi_modifier = mod_item.use_multi_modifier
+                mod.use_vertex_groups = mod_item.use_vertex_groups
+                mod.invert_vertex_group = mod_item.invert_vertex_group
+                mod.vertex_group = mod_item.vertex_group
+            elif mod.type == 'CORRECTIVE_SMOOTH':
+                mod.factor = mod_item.factor
+                mod.iterations = mod_item.iterations
+                mod.smooth_type = mod_item.smooth_type
+                mod.scale = mod_item.scale
+                mod.smooth_type = mod_item.smooth_type
+                mod.use_only_smooth = mod_item.use_only_smooth
+                mod.use_pin_boundary = mod_item.use_pin_boundary
+            elif mod.type == 'LATTICE':
+                mod.object = mod_item.object
+                mod.vertex_group = mod_item.vertex_group
+                mod.invert_vertex_group = mod_item.invert_vertex_group
+                mod.strength = mod_item.strength
+            elif mod.type == 'SMOOTH':
+                mod.factor = mod_item.factor
+                mod.iterations = mod_item.iterations
+                mod.use_x = mod_item.use_x
+                mod.use_y = mod_item.use_y
+                mod.use_z = mod_item.use_z
+                mod.vertex_group = mod_item.vertex_group
+                mod.invert_vertex_group = mod_item.invert_vertex_group
+            elif mod.type == 'LAPLACIANSMOOTH':
+                mod.lambda_factor = mod_item.lambda_factor
+                mod.lambda_border = mod_item.lambda_border
+                mod.iterations = mod_item.iterations
+                mod.use_volume_preserve = mod_item.use_volume_preserve
+                mod.use_normalized = mod_item.use_normalized
+                mod.use_x = mod_item.use_x
+                mod.use_y = mod_item.use_y
+                mod.use_z = mod_item.use_z
+                mod.vertex_group = mod_item.vertex_group
+                mod.invert_vertex_group = mod_item.invert_vertex_group
+            if mod.type == 'MESH_DEFORM':
+                mod.precision = mod_item.precision
+                mod.object = mod_item.object
+                mod.is_bound = mod_item.is_bound
+                mod.use_dynamic_bind = mod_item.use_dynamic_bind
+                mod.vertex_group = mod_item.vertex_group
+                mod.invert_vertex_group = mod_item.invert_vertex_group
 
-            if mod is not None and obj.animation_data is not None:
-                for dr_item in mod_item.drivers:
-                    dr = obj.animation_data.drivers.find(dr_item.data_path)
-                    if dr is not None:
-                        dr.mute = False
+        if mod is not None and obj.animation_data is not None:
+            for dr_item in mod_item.drivers:
+                dr = obj.animation_data.drivers.find(dr_item.data_path)
+                if dr is not None:
+                    dr.mute = False
 
     # Restore the modifier order
     for mod_item in modifier_list:
@@ -285,9 +292,6 @@ def restore_bake_modifiers(obj, modifier_list):
                 dr = obj.animation_data.drivers.find(dr_item.data_path)
                 if dr is not None:
                     dr.mute = False
-
-    # mod_drivers = [dr for dr in obj.animation_data.drivers if f'modifiers["{mod.name}"]' in dr.data_path]
-
     # Re-bind deform modifiers
     bind_valid_bake_modifiers(obj, modifier_list)
 

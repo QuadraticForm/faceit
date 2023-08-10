@@ -3,7 +3,7 @@ import bpy
 from bpy.props import BoolProperty
 from mathutils import Vector
 
-from ..core.modifier_utils import get_faceit_armature_modifier
+from ..core.modifier_utils import get_faceit_armature_modifier, populate_bake_modifier_items, set_mod_bake
 from ..panels.draw_utils import draw_text_block
 
 from ..animate.animate_utils import restore_constraints_to_default_values
@@ -27,31 +27,32 @@ class FACEIT_OT_JoinWithBodyArmature(bpy.types.Operator):
         default=False,
         description=''
     )
-
     is_arp_body: BoolProperty(
         name='Auto Rig Pro',
         default=False,
         options={'SKIP_SAVE', },
     )
-
     tag_arp_custom: BoolProperty(
         name='Tag Custom',
         default=False,
         options={'SKIP_SAVE', },
         description='Tag the deform bones with a custom property so they will be exported in ARP operators.'
     )
-
     merge_faceit_weights: BoolProperty(
         name='Merge Faceit Weights',
         default=True,
         description='Overwrite any weights below Face weights, keeping Faceit weights in tact. If this is disabled, the Faceit weights will be removed.',
 
     )
-
     keep_faceit_bone_groups: BoolProperty(
         name='Keep Bone Groups',
         default=True,
         description='Keep Bone Groups and Colors from the Faceit rig',
+    )
+    use_armature_modifier_for_baking: BoolProperty(
+        name='Use Armature Modifier for Baking',
+        description='Use armature modifier for baking the shape keys.',
+        default=True,
     )
 
     @classmethod
@@ -74,7 +75,7 @@ class FACEIT_OT_JoinWithBodyArmature(bpy.types.Operator):
             if Vector((round(i, 3) for i in faceit_rig.scale)) != Vector((1,) * 3):
                 self.report(
                     {'ERROR'},
-                    f"Body and Faceit rigs have different scales. Please apply the scale on the Faceit Armature '{body_rig.name}' first.")
+                    f"Body and Faceit rigs have different scales. Please apply the scale on the Faceit Armature '{faceit_rig.name}' first.")
                 return {'CANCELLED'}
         self.tag_arp_custom = self.is_arp_body = any(x.startswith('arp_') for x in scene.faceit_body_armature.keys())
 
@@ -88,7 +89,6 @@ class FACEIT_OT_JoinWithBodyArmature(bpy.types.Operator):
             text='This operation is destructive. You can\'t go back to landmarks anymore.',
             heading='DESTRUCTIVE'
         )
-
         row = layout.row()
         row.prop(self, 'merge_faceit_weights', icon='MOD_VERTEX_WEIGHT')
         if self.merge_faceit_weights:
@@ -100,17 +100,14 @@ class FACEIT_OT_JoinWithBodyArmature(bpy.types.Operator):
         row = layout.row()
         row.prop(self, 'keep_faceit_bone_groups', icon='GROUP_BONE')
         if self.is_arp_body:
-
             row = layout.row()
             row.label(text='Auto Rig Pro detected:')
-
             if 'c_eye_target.x' in context.scene.faceit_body_armature.pose.bones:
                 draw_text_block(
                     layout=layout,
                     text='ARP Face Rig detected. Consider Removing it.',
                     heading='WARNING'
                 )
-
             row = layout.row()
             row.prop(self, 'tag_arp_custom', icon='EVENT_C')
             if self.tag_arp_custom:
@@ -119,6 +116,8 @@ class FACEIT_OT_JoinWithBodyArmature(bpy.types.Operator):
                     text='ARP export to game engines might not work as expected.',
                     heading='WARNING'
                 )
+        row = layout.row()
+        row.prop(self, 'use_armature_modifier_for_baking', icon='MOD_ARMATURE')
 
     def execute(self, context):
 
@@ -129,76 +128,72 @@ class FACEIT_OT_JoinWithBodyArmature(bpy.types.Operator):
         # ------------------------------------------------------
         body_rig = scene.faceit_body_armature
         faceit_rig = futils.get_faceit_armature(force_original=True)
-        faceit_objects = futils.get_faceit_objects_list()
-        auto_normalize = scene.tool_settings.use_auto_normalize
-        scene.tool_settings.use_auto_normalize = False
-
-        # Rigs
-
-        # Face parent bone
-        head_bone = scene.faceit_body_armature_head_bone
-
         if not faceit_rig:
             self.report({'ERROR'}, 'The Faceit Armature doesn\'t exist')
             return {'CANCELLED'}
-
-        # Unhide
+        head_bone_name = scene.faceit_body_armature_head_bone
+        head_bone = body_rig.data.bones.get(head_bone_name)
+        if not head_bone:
+            self.report({'ERROR'}, f'The selected bone {head_bone_name} does not exist.')
+            return {'CANCELLED'}
+        faceit_objects = futils.get_faceit_objects_list()
+        if not any((futils.is_collection_visible(context, coll) for coll in body_rig.users_collection)):
+            self.report({'ERROR'}, f'The Body Rig {body_rig.name} is not visible in any collection.')
+            return {'CANCELLED'}
+        futils.get_faceit_collection()
         futils.set_hide_obj(body_rig, False)
         futils.set_hide_obj(faceit_rig, False)
 
+        auto_normalize = scene.tool_settings.use_auto_normalize
+        scene.tool_settings.use_auto_normalize = False
+
         # Combined Rig layer status
         rig_layers_combined = [a or b for a, b in zip(faceit_rig.data.layers, body_rig.data.layers)]
-
         # The Bone Groups from Faceit Rig
         if self.keep_faceit_bone_groups:
             faceit_bone_groups = get_bone_groups_dict(faceit_rig)
-
-        # Force default constraint values
-        restore_constraints_to_default_values(faceit_rig)
-
         # Force Rest Position
         faceit_rig.data.pose_position = 'REST'
         body_rig.data.pose_position = 'REST'
-
         if self.tag_arp_custom:
             # Get all bone names for ARP custom tags
             all_faceit_bones = [b.name for b in faceit_rig.pose.bones]
-
-        # Find child objects of body rig and change the relation from parent to weighted
-        body_children = {obj: obj.parent_bone for obj in body_rig.children
-                         if obj.type == 'MESH' if obj.parent_type == 'BONE'}
-        # Find childrens child objects and change the relation from parent to weighted
-        for obj, parent_bone in body_children.copy().items():
-            if obj.children:
-                for obj_child in obj.children:
-                    if obj in faceit_objects:
-                        body_children.update({obj_child: parent_bone})
-
-        for body_child, parent_bone in body_children.items():
-            mod_exists = False
-            for mod in body_child.modifiers:
-                if mod.type == 'ARMATURE':
-                    if mod.object:
-                        if mod.object.name == body_rig.name:
-                            mod_exists = True
-            if not mod_exists:
-                mod = body_child.modifiers.new(name="Armature",
-                                               type='ARMATURE')
-                mod.object = body_rig
-            body_child.parent_type = 'OBJECT'
-
-            if body_child.vertex_groups.find(parent_bone) == -1:
-                body_child.vertex_groups.new(name=parent_bone)
-
-            # Assign vertices to group
-            assign_vertex_grp(
-                body_child, vertices=[v.index for v in body_child.data.vertices],
-                grp_name=parent_bone)
-
-            # Get faceit deform vertex groups names
+        # Find child objects of relevant body rig bones
+        head_bone_children = head_bone.children_recursive
+        bone_children_dict_body = {}
+        for obj in faceit_objects:
+            for b in head_bone_children:
+                if b.name == obj.parent_bone:
+                    try:
+                        bone_children_dict_body[b].append(obj)
+                    except (KeyError, AttributeError):
+                        bone_children_dict_body[b] = [obj, ]
+                    if obj.children:
+                        for obj_child in obj.children_recursive:
+                            bone_children_dict_body[b].append(obj_child)
+                    break
+        # Change the relation from parent to weighted
+        for bone, child_objects in bone_children_dict_body.items():
+            for body_child in child_objects:
+                mod_exists = False
+                for mod in body_child.modifiers:
+                    if mod.type == 'ARMATURE':
+                        if mod.object:
+                            if mod.object.name == body_rig.name:
+                                mod_exists = True
+                if not mod_exists:
+                    mod = body_child.modifiers.new(name="Armature", type='ARMATURE')
+                    mod.object = body_rig
+                body_child.parent_type = 'OBJECT'
+                if body_child.vertex_groups.find(bone.name) == -1:
+                    body_child.vertex_groups.new(name=bone.name)
+                # Assign vertices to group
+                assign_vertex_grp(
+                    body_child, vertices=[v.index for v in body_child.data.vertices],
+                    grp_name=bone.name)
+        # Get faceit deform vertex groups names
         all_faceit_deform_groups = get_deform_bones_from_armature(faceit_rig)
         body_deform_groups = get_deform_bones_from_armature(body_rig)
-
         if any(x in body_deform_groups for x in all_faceit_deform_groups):
             self.report(
                 {'WARNING'},
@@ -213,51 +208,34 @@ class FACEIT_OT_JoinWithBodyArmature(bpy.types.Operator):
         # - Join the original objects
         # ------------------------------------------------------
         if self.merge_faceit_weights:
-
             def find_vgroups(obj, vgroups_to_find):
                 ''' Returns True if any of the @vgroups (list[String]) is found in @obj vertex groups'''
                 return any(vg.name in vgroups_to_find for vg in obj.vertex_groups)
-
-            # Get the relevant deform bones for both armatures
-            all_body_deform_groups = get_deform_bones_from_armature(body_rig)
-
             # Remove Rigid group
             face_deform_groups = all_faceit_deform_groups.copy()
             face_deform_groups.remove('DEF-face')
-
             # Get all face objects that are bound to the faceit armature
             objects_to_process = [obj for obj in faceit_objects if find_vgroups(
-                obj, all_faceit_deform_groups) and find_vgroups(obj, body_deform_groups)]
-            # if any([vg.name in all_faceit_deform_groups for vg in ob.vertex_groups])]
-
+                obj, all_faceit_deform_groups)]  # and find_vgroups(obj, body_deform_groups)]
             if not objects_to_process:
-                self.report({'ERROR'}, 'Please bind the armature first!')
+                self.report(
+                    {'ERROR'},
+                    f'Both rigs need to be bound to the registered objects! Please bind the {faceit_rig} to the objects first')
                 return {'CANCELLED'}
-
-            print(f'processing {len(objects_to_process)} objects')
-
             for obj in objects_to_process:
-
                 print(f'Start process on {obj.name}')
                 futils.set_hidden_state_object(obj, False, False)
-
                 # Store vertex lock states
                 vg_lock_state_dict = {vg.name: vg.lock_weight for vg in obj.vertex_groups}
-
                 # Hide all modifiers
                 mod_show_dict = {}
                 for mod in obj.modifiers:
-
                     mod_show_dict[mod.name] = mod.show_viewport
-
                     mod.show_viewport = False
-
                 dup_ob = futils.duplicate_obj(obj, link=True)
-
                 def_face_grp_dup = dup_ob.vertex_groups.get('DEF-face')
-
                 # Get the body weights to be normalized
-                relevant_groups = all_body_deform_groups
+                relevant_groups = body_deform_groups
                 if def_face_grp_dup:
                     relevant_groups.append(def_face_grp_dup.name)
 
@@ -296,30 +274,23 @@ class FACEIT_OT_JoinWithBodyArmature(bpy.types.Operator):
                 for vg in obj.vertex_groups:
                     if vg.name in face_deform_groups:
                         vg.lock_weight = True
-
                 data_transfer_vertex_groups(dup_ob, obj)
-
                 # Remove the duplicate obj
                 bpy.data.objects.remove(dup_ob)
-
                 # --------------- OBJECT SETTINGS -------------------
                 # | - Remove Faceit Armature Mod
                 # | - Restore Modifier Visibility States
                 # | - Ensure Body Armature Mod
                 # -------------------------------------------------------
-
                 # Restore lock state
                 for vg_name, lock in vg_lock_state_dict.items():
                     vg = obj.vertex_groups.get(vg_name)
                     if vg:
                         vg.lock_weight = lock
-
                 def_face_grp = obj.vertex_groups.get('DEF-face')
                 if def_face_grp:
                     obj.vertex_groups.remove(def_face_grp)
-
                 found_body_armature_mod = False
-
                 # Restore the hide states of all other modifiers
                 for mod, show_value in mod_show_dict.items():
                     mod = obj.modifiers.get(mod)
@@ -328,12 +299,10 @@ class FACEIT_OT_JoinWithBodyArmature(bpy.types.Operator):
                         if mod.type == 'ARMATURE' and mod.object == body_rig:
                             found_body_armature_mod = True
                             mod.show_viewport = True
-
                 # Ensure Body Armature mod
                 if not found_body_armature_mod:
                     mod = obj.modifiers.new(name='Armature', type='ARMATURE')
                     mod.object = body_rig
-
         # Finally, remove armature modifier, if not merge weights -> remove faceit weights
         for obj in futils.get_faceit_objects_list():
             # Don't merge Faceit Weights --> Remove them
@@ -341,12 +310,10 @@ class FACEIT_OT_JoinWithBodyArmature(bpy.types.Operator):
                 for vg in obj.vertex_groups:
                     if vg.name in all_faceit_deform_groups:
                         obj.vertex_groups.remove(vg)
-
             # Remove the Faceit armature modifier
             arm_mod = get_faceit_armature_modifier(obj)
             if arm_mod:
                 obj.modifiers.remove(arm_mod)
-
         # --------------- JOIN THE ARMATURES -------------------
         # - Store the Faceit bone groups
         # - Join Faceit bones into body armature
@@ -354,34 +321,25 @@ class FACEIT_OT_JoinWithBodyArmature(bpy.types.Operator):
         # - Apply the Faceit bone groups to body armature
         # - Restore layers of both armatures
         # ------------------------------------------------------
-
         # Join the armatures
         futils.clear_object_selection()
         futils.set_active_object(faceit_rig.name)
         futils.set_active_object(body_rig)
-
         bpy.ops.object.join()
-
         futils.clear_object_selection()
         futils.set_active_object(body_rig.name)
-
         bpy.ops.object.mode_set(mode='EDIT')
-
         face_bone = body_rig.data.edit_bones.get('DEF-face')
-        head_bone = body_rig.data.edit_bones.get(head_bone)
-
+        head_bone_edit = body_rig.data.edit_bones.get(head_bone_name)
         # Restore rigify naming and layers for face bone
         face_bone.name = 'ORG-face'
         face_bone.use_deform = False
         face_bone.layers[31] = True
         face_bone.layers[29] = False
-
-        face_bone.parent = head_bone
-
+        face_bone.parent = head_bone_edit
         if self.keep_faceit_bone_groups:
             bpy.ops.object.mode_set(mode='POSE')
             set_bone_groups_from_dict(body_rig, bone_groups_dict=faceit_bone_groups)
-
         # Remove copy rotation eye bone constraints:
         eyelid_def_bones = [
             'DEF-lid.B.L',
@@ -406,17 +364,20 @@ class FACEIT_OT_JoinWithBodyArmature(bpy.types.Operator):
             for c in bone.constraints:
                 if c.type == 'COPY_ROTATION':
                     bone.constraints.remove(c)
-
         bpy.ops.object.mode_set()
-
         body_rig.data.layers = rig_layers_combined[:]
-
         if self.tag_arp_custom:
             all_faceit_bones.append('ORG-face')
             for b in body_rig.pose.bones:
                 if b.name in all_faceit_bones:
                     b['cc'] = 1.0
-
+        populate_bake_modifier_items(faceit_objects)
+        if self.use_armature_modifier_for_baking:
+            for obj in faceit_objects:
+                for mod in obj.modifiers:
+                    if mod.type == 'ARMATURE':
+                        if mod.object == body_rig:
+                            set_mod_bake(obj, mod, True)
         # Restore POSE position
         body_rig.data.pose_position = 'POSE'
 
@@ -440,4 +401,5 @@ class FACEIT_OT_JoinWithBodyArmature(bpy.types.Operator):
         scene.tool_settings.use_auto_normalize = auto_normalize
         if not warning:
             self.report({'INFO'}, f'Succesfully joined the FaceitRig to the armature {body_rig.name}')
+        scene.faceit_workspace.active_tab = 'BAKE'
         return {'FINISHED'}

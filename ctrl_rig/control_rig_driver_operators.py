@@ -53,19 +53,13 @@ class FACEIT_OT_SetupControlDrivers(bpy.types.Operator):
         if not crig_objects:
             self.report({'ERROR'}, 'Couldn\'t find any target objects. Please specify them or update the control rig first.')
             return {'CANCELLED'}
-
         connected_any = False
-
         for obj in crig_objects:
-
             missing_shapes = []
-
             shapekeys = obj.data.shape_keys
-
             if not shapekeys:
                 self.report({'WARNING'}, 'Object {} contains no Shape Keys'.format(obj.name))
                 continue
-
             if not hasattr(shapekeys, 'key_blocks'):
                 self.report({'WARNING'}, 'Object {} contains no Shape Keys'.format(obj.name))
                 continue
@@ -77,12 +71,9 @@ class FACEIT_OT_SetupControlDrivers(bpy.types.Operator):
                     jaw_open_name = jaw_open_target.name
 
             for shape_item in crig_targets:
-
                 shape_name = shape_item.name
                 target_shape_list = [item.name for item in shape_item.target_shapes]
-
                 for target_shape in target_shape_list:
-
                     result, _bone_name = ctrl_data.get_driver_from_retarget_dictionary_fixed_slider_range(
                         shape_name,
                         target_shape,
@@ -91,7 +82,6 @@ class FACEIT_OT_SetupControlDrivers(bpy.types.Operator):
                         custom_slider=shape_item.custom_slider,
                         jaw_open_shape=jaw_open_name
                     )
-
                     if result:
                         connected_any = True
                     else:

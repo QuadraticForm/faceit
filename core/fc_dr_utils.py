@@ -306,38 +306,29 @@ def frame_value_pairs_to_numpy_array(frames, values):
 
 
 def populate_keyframe_points_from_np_array(fc, data, attr='co', add=False, join_with_existing=True):
-
+    '''Populate Keyframe Points from a numpy array.'''
     result = False
-
     if not fc:
         print('ERROR: Can not find fcurve')
         return False
-
     if add:
-
         if len(fc.keyframe_points) > 0 and join_with_existing:
             existing_kf_data = kf_data_to_numpy_array(fc, attr=attr)
             data = join_np_array_kf_data(existing_kf_data, data)
-
         clear_fcurve_kf_points(fc)
         count = data.shape[0]
         fc.keyframe_points.add(count=count)
-
-    # try:
     if data.shape[0] == len(fc.keyframe_points):
         fc.keyframe_points.foreach_set(attr, np.reshape(data, (-1, 1)))
         result = True
     else:
         print('[fc_dr_utils/populate_keyframe_points_from_np_array] Keyframe_Points don\'t match array. Add Keyframes first')
-
     fc.update()
-
     return result
 
 
 def clear_fcurve_kf_points(fc):
     ''' Clear all keyframe points from fcurve '''
-
     kf_count = len(fc.keyframe_points)
     for _ in range(kf_count):
         kf = fc.keyframe_points[-1]

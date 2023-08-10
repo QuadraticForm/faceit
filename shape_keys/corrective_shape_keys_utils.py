@@ -136,6 +136,7 @@ def remove_corrective_shape_key(expression_list, objects, expression_name=''):
     corr_sk_name = 'faceit_cc_' + expression_name
     sk_found = False
     for obj in objects:
+        print(obj.name)
         if has_shape_keys(obj):
             corr_sk = obj.data.shape_keys.key_blocks.get(corr_sk_name)
             if corr_sk:

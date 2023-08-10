@@ -1,17 +1,21 @@
 
 import fnmatch
-
+import bpy
 from bpy.props import (BoolProperty, CollectionProperty, EnumProperty,
                        FloatProperty, IntProperty, StringProperty)
 from bpy.types import PropertyGroup, UI_UL_list
 
+from ..panels.draw_utils import draw_text_block
+
+
 from .faceit_data import get_face_region_items
-from .retarget_list_utils import (get_index_of_collection_item,
-                                  get_index_of_parent_collection_item,
-                                  is_target_shape_double,
-                                  set_base_regions_from_dict)
+from .retarget_list_utils import (are_target_shapes_valid, get_index_of_collection_item,
+                                  get_index_of_parent_collection_item, get_target_shape_keys, is_target_shape_double,
+                                  set_base_regions_from_dict, target_shape_key_in_registered_objects,
+                                  get_invalid_target_shapes)
 from .shape_key_utils import (get_shape_key_names_from_objects,
-                              get_shape_keys_from_faceit_objects_enum)
+                              get_shape_keys_from_faceit_objects_enum, set_slider_max)
+from ..core.faceit_utils import get_faceit_objects_list
 
 
 class TargetShapes(PropertyGroup):
@@ -20,6 +24,19 @@ class TargetShapes(PropertyGroup):
         description='The Target Shape',
         default='---',
     )
+
+
+def update_shape_key_ranges_based_on_amplify(self, context):
+    '''Update the shape key ranges based on the amplify value'''
+    if not bpy.context.preferences.addons["faceit"].preferences.dynamic_shape_key_ranges:
+        return
+    target_sk = get_target_shape_keys(self, objects=get_faceit_objects_list())
+    id_data = self.id_data
+    idx = get_index_of_collection_item(self)
+    setattr(id_data, self.path_from_id().split('[')[-2] + "_index", idx)
+    for sk in target_sk:
+        set_slider_max(sk, value=self.amplify)
+        sk.value = self.amplify
 
 
 class RetargetShapesBase:
@@ -45,7 +62,10 @@ class RetargetShapesBase:
         default=1.0,
         description='Use the Amplify Value to increasing or decreasing the motion of this expression.',
         soft_min=0.0,
-        soft_max=10.0,
+        soft_max=3.0,
+        min=-1.0,
+        max=10.0,
+        update=update_shape_key_ranges_based_on_amplify
     )
     use_animation: BoolProperty(
         name='Use Animation',
@@ -255,11 +275,6 @@ class RetargetShapesListBase():
         description="Reverse name filtering",
     )
 
-    def draw_alert(self, item):
-        ''' if return statement is true the row is red. '''
-        sk_names = get_shape_key_names_from_objects()
-        return any([item.name not in sk_names for item in item.target_shapes])
-
     def draw_active(self, item):
         ''' If the return statement is false the row is drawn deactivated '''
         return bool(item.use_animation and item.target_shapes)
@@ -280,26 +295,18 @@ class RetargetShapesListBase():
 
         if self.layout_type in {'DEFAULT', 'COMPACT'}:
 
+            target_shapes_valid = are_target_shapes_valid(item)
             row = layout.row(align=True)
-
-            first_col = row.row(align=True)
-
-            if self.show_use_animation:
-
-                if item.use_animation is True:
-                    icon = 'CHECKBOX_HLT'
-                else:
-                    icon = 'CHECKBOX_DEHLT'
-
-                first_col.prop(item, 'use_animation', text='', expand=False, icon=icon)
-
-            second_col = row.row(align=True)
-
-            second_col.alert = self.draw_alert(item)
-            second_col.enabled = self.draw_active(item)
-
-            second_col.prop(item, self.property_name, emboss=False, text='')
-
+            cols = row.split(factor=0.5)
+            first_col = cols.row(align=False)
+            first_col.enabled = target_shapes_valid
+            split = first_col.split(factor=0.7, align=True)
+            name = getattr(item, self.property_name)
+            split.label(text=name)
+            split.prop(item, 'amplify', emboss=True, text="")
+            second_col = cols.row(align=True)
+            if item.target_shapes:
+                second_col.alert = not target_shapes_valid
             op = second_col.operator(self.draw_target_shapes_operator, text=self.get_display_text_target_shapes(item),
                                      emboss=True, icon='DOWNARROW_HLT')
             op.source_shape = item.name
@@ -433,18 +440,14 @@ class TargetShapesListBase:
 
             layout.use_property_split = True
             layout.use_property_decorate = False
-
             row = layout.row(align=True)
             row.prop(item, 'name', text='', emboss=False)
-
             op = row.operator(self.edit_target_shapes_operator, text='', icon='DOWNARROW_HLT')
             op.operation = 'CHANGE'
-
             # Parent index
             source_shape_index = get_index_of_parent_collection_item(item)
             op.source_shape_index = source_shape_index
             op.target_shape = item.name
-
             op = row.operator(self.remove_target_shapes_operator, text='', icon='X')
             op.source_shape_index = source_shape_index
             op.target_shape = item.name
@@ -481,26 +484,29 @@ class DrawTargetShapesListBase(RetargetingBase):
         return wm.invoke_popup(self)
 
     def draw(self, context):
-
         layout = self.layout
         retarget_list = self.get_retarget_shapes()
-
         shape_item = retarget_list[self.source_shape]
         shape_item_index = retarget_list.find(self.source_shape)
-
         row = layout.row()
         if self.use_display_name:
             row.label(text='Source Shape: {}'.format(shape_item.display_name))
         else:
             row.label(text='Source Shape: {}'.format(shape_item.name))
-
         row = layout.row()
         row.template_list(self.target_shapes_list, '', shape_item,
                           'target_shapes', shape_item, 'target_list_index')
         row = layout.row()
-
         op = row.operator(self.edit_target_shapes_operator, text='Add Target Shape', icon='ADD')
         op.source_shape_index = shape_item_index
+        missing_target_shapes = get_invalid_target_shapes(shape_item)
+        if missing_target_shapes:
+            draw_text_block(
+                layout=layout,
+                text=f"Missing Target Shapes: {missing_target_shapes}",
+                draw_in_op=True,
+                alert=True
+            )
 
     def execute(self, context):
         return{'FINISHED'}
@@ -550,30 +556,22 @@ class EditTargetShapeBase(RetargetingBase):
         return {'FINISHED'}
 
     def execute(self, context):
-
         # check if target shapes have been assigend to other shape items....
         retarget_list = self.get_retarget_shapes()
         shape_item = retarget_list[self.source_shape_index]
         target_shapes = shape_item.target_shapes
         target_shape_index = target_shapes.find(self.target_shape)
-
         if shape_item:
-
             # Check if the target shape (type) is already assigned
             if is_target_shape_double(self.new_target_shape, retarget_list):
-                # pass
                 source_shape = ''
                 for _shape_item in retarget_list:
-
                     if self.new_target_shape in _shape_item.target_shapes:
-
                         source_shape = _shape_item.name
-
                 self.report(
                     {'WARNING'},
                     'WARNING! The shape {} is already assigned to Source Shape {}'.format(
                         self.new_target_shape, source_shape))
-
             if self.operation == 'CHANGE':
                 if target_shapes and target_shape_index != -1:
                     item = target_shapes[target_shape_index]
@@ -582,7 +580,6 @@ class EditTargetShapeBase(RetargetingBase):
             else:
                 item = target_shapes.add()
                 item.name = self.new_target_shape
-
         for region in context.area.regions:
             region.tag_redraw()
 
@@ -608,19 +605,14 @@ class RemoveTargetShapeBase(RetargetingBase):
         return super().poll(context)
 
     def execute(self, context):
-
         retarget_list = self.get_retarget_shapes()
-
         source_item = retarget_list[self.source_shape_index]
         target_shapes = source_item.target_shapes
         target_shape_index = target_shapes.find(self.target_shape)
-
         if target_shape_index != -1:
             source_item.target_shapes.remove(target_shape_index)
-
         for region in context.area.regions:
             region.tag_redraw()
-
         return{'FINISHED'}
 
 
@@ -636,19 +628,14 @@ class ClearTargetShapeBase(RetargetingBase):
 
     def execute(self, context):
         retarget_list = self.get_retarget_shapes()
-
         shape_item = None
         try:
-
             shape_item = retarget_list[self.source_shape_name]
         except KeyError:
             self.report({'ERROR'}, f'Can\'t find shape {self.source_shape_name}')
             return{'CANCELLED'}
-
         if shape_item:
-
             shape_item.target_shapes.clear()
-
         for region in context.area.regions:
             region.tag_redraw()
 

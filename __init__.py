@@ -1,42 +1,41 @@
-# ***** BEGIN GPL LICENSE BLOCK *****
-#
-# This program is free software; you can redistribute it and/or
-# modify it under the terms of the GNU General Public License
-# as published by the Free Software Foundation; either version 2
-# of the License, or (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program; if not, write to the Free Software Foundation,
-# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
-#
-# ***** END GPL LICENCE BLOCK *****
+'''
+Copyright (C) 2020 Fynn Braren
+fynn.braren@posteo.de
+
+Created by Fynn Braren
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+'''
 
 import bpy
-
-from .landmarks.landmarks_utils import unlock_3d_view
-from . import auto_load
 from bpy.props import IntProperty
+
+from . import auto_load
+from .landmarks.landmarks_utils import unlock_3d_view
 
 bl_info = {
     'name': 'FACEIT',
     'author': 'Fynn Braren',
     'description': 'Facial Expressions And Performance Capture',
     'blender': (2, 80, 0),
-    'version': (2, 1, 39),
+    'version': (2, 3, 1),
     'location': 'View3D',
     'warning': 'Beta version - don\'t use in production environment!',
     'wiki_url': "https://faceit-doc.readthedocs.io/en/latest/",
     'tracker_url': "https://faceit-doc.readthedocs.io/en/latest/support/",
     'category': 'Animation'
 }
-
-
-auto_load.init()
 
 
 def update_use_vertex_size_scaling(self, context):
@@ -94,30 +93,59 @@ class FaceitPreferences(bpy.types.AddonPreferences):
         default=True,
         update=update_auto_lock_3d_view
     )
+    dynamic_shape_key_ranges: bpy.props.BoolProperty(
+        name="Dynamic Shape Key Ranges",
+        description="Automatically adjust the slider_min/max ranges of shape keys to the animation data",
+        default=True,
+    )
 
     def draw(self, context):
         layout = self.layout
-        col = layout.column(align=True)
-        col.use_property_split = True
-        col.use_property_decorate = False
-        row = col.row(align=True)
+        col = layout.grid_flow(columns=2, align=False)
+        col_left = col.column(align=True)
+        row = col_left.row(align=True)
+        row.label(text="General Settings")
+        row = col_left.row(align=True)
         row.prop(self, 'web_links', icon='QUESTION')  # INFO
+        row = col_left.row(align=True)
+        row.label(text="Animation Settings")
+        row = col_left.row(align=True)
+        row.prop(self, "dynamic_shape_key_ranges", icon='SHAPEKEY_DATA')
 
-        col.separator()
-        # col.use_property_split = False
-        row = col.row(align=True)
+        col_right = col.column(align=True)
+        # col_right.use_property_split = True
+        # col_right.use_property_decorate = False
+        row = col_right.row(align=True)
         row.label(text="Landmark Settings")
-        row = col.row(align=True)
+        row = col_right.row(align=True)
         row.prop(self, "use_vertex_size_scaling", icon='PROP_OFF')
         if self.use_vertex_size_scaling:
-            # col.use_property_split = True
-            row = col.row(align=True)
+            row = col_right.row(align=True)
             row.prop(self, "default_vertex_size")
-            row = col.row(align=True)
+            row = col_right.row(align=True)
             row.prop(self, "landmarks_vertex_size")
-        col.separator()
-        row = col.row()
+        col.use_property_split = False
+        col_right.separator()
+        row = col_right.row()
         row.prop(self, "auto_lock_3d_view", icon='RESTRICT_VIEW_ON')
+
+
+def cleanse_modules():
+    """search for your plugin modules in blender python sys.modules and remove them"""
+
+    import sys
+
+    all_modules = sys.modules
+    all_modules = dict(sorted(all_modules.items(), key=lambda x: x[0]))  # sort them
+
+    for k, v in all_modules.items():
+        if k.startswith("faceit"):
+            if "auto_load" in k:
+                continue
+            del sys.modules[k]
+
+    return None
+auto_load.init()
 
 
 def register():
@@ -138,4 +166,5 @@ def register():
 def unregister():
     bpy.utils.unregister_class(FaceitPreferences)
     auto_load.unregister()
+    cleanse_modules()
     del bpy.types.Scene.faceit_version

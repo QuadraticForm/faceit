@@ -368,9 +368,109 @@ class FaceitObjects(PropertyGroup):
     def get_object(self):
         return futils.get_object(self.name)
 
-# --------------- FUNCTIONS --------------------
-# | - Update/Getter/Setter
-# ----------------------------------------------
+
+def update_masked(self, context):
+    # Start the operator, closes automatically when the property is changed
+    bpy.ops.faceit.mask_group(
+        'INVOKE_DEFAULT',
+        vgroup_name=self.name,
+        operation='ADD' if self.is_masked else 'REMOVE',
+        # prop=self.name
+    )
+
+
+class AssignedObjects(PropertyGroup):
+    name: StringProperty(
+        name='Object Name'
+    )
+
+
+class FaceitVertexGroups(PropertyGroup):
+    name: StringProperty(
+        name='Vertex Group Name',
+        description='Vertex group name'
+    )
+    is_drawn: BoolProperty(
+        name='Draw Assigned',
+        default=False
+    )
+    is_assigned: BoolProperty(
+        name='Is Assigned',
+    )
+    is_masked: BoolProperty(
+        name='Is Masked',
+        default=False,
+        description='Is this vertex group a mask?',
+    )
+    mask_inverted: BoolProperty(
+        name='Invert Mask',
+        default=True,
+        description='Invert the mask',
+    )
+    assigned_to_objects: CollectionProperty(
+        name='Assigned To Objects',
+        type=AssignedObjects
+    )
+
+    def assign_object(self, obj_name):
+        if obj_name in self.assigned_to_objects:
+            return
+        item = self.assigned_to_objects.add()
+        item.name = obj_name
+        self.is_assigned = True
+
+    def remove_object(self, obj_name):
+        idx = self.assigned_to_objects.find(obj_name)
+        if idx != -1:
+            self.assigned_to_objects.remove(idx)
+            if not self.assigned_to_objects:
+                self.is_assigned = False
+
+    def validate_assigned_objects(self):
+        '''Validate the assigned objects'''
+        for obj_name in self.assigned_to_objects:
+            if obj_name not in bpy.context.scene.faceit_face_objects:
+                self.remove_object(obj_name)
+            if not futils.get_object(obj_name):
+                self.remove_object(obj_name)
+
+    def get_assigned_objects(self, validate=True):
+        for obj in self.assigned_to_objects:
+            if obj.name not in bpy.context.scene.faceit_face_objects:
+                continue
+            # if validate:
+            #     self.validate_assigned_objects()
+            obj = futils.get_object(obj.name)
+            if obj:
+                yield obj
+        # assigned_to_objects: StringProperty(
+        #     name='Assigned To Objects',
+        #     default=''
+        # )
+        # def assign_object(self, object_name):
+        #     assigned_to = self.assigned_to_objects.split(';;')
+        #     if object_name not in assigned_to:
+        #         self.assigned_to_objects += object_name + ';;'
+        #     print(self.assigned_to_objects.split(';;'))
+
+        # def get_assigned_object_names(self):
+        #     ''''''
+        #     assigned_to = self.assigned_to_objects.split(';;')
+        #     return [x for x in assigned_to if x != '']
+        #     # return self.assigned_to_objects.split(';;')
+
+        # def remove_object(self, object_name):
+        #     '''Remove an object'''
+        #     assigned_to = self.assigned_to_objects.split(';;')
+        #     if object_name in assigned_to:
+        #         assigned_to.remove(object_name)
+        #     self.assigned_to_objects = ''
+        #     for x in assigned_to:
+        #         self.assigned_to_objects += x + ';;'
+
+        # --------------- FUNCTIONS --------------------
+        # | - Update/Getter/Setter
+        # ----------------------------------------------
 
 
 def update_object_index(self, context):
@@ -411,13 +511,8 @@ def register():
         name='Show Warnings',
         default=False,
     )
-
-    Scene.faceit_vgroup_assign_method = EnumProperty(
-        name='Assign Method',
-        items=(
-            ('OVERWRITE', 'Replace', 'Overwrite the Vertex Groups previous assignment'),
-            ('ADD', 'Add', 'Add selected verts to previously assigned vertices'),
-        ),
+    Scene.faceit_vertex_groups = CollectionProperty(
+        type=FaceitVertexGroups
     )
 
 
@@ -426,4 +521,3 @@ def unregister():
     del Scene.faceit_subscribed
     del Scene.faceit_face_index
     del Scene.faceit_show_warnings
-    del Scene.faceit_vgroup_assign_method

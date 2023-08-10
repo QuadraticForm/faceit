@@ -11,6 +11,7 @@ CONTROL_RIG_FILE = '/resources/FaceitControlRig.blend'
 LANDMARKS_FILE = '/resources/FaceitLandmarks.blend'
 RETARGET_PRESETS = '/resources/retarget_presets/'
 EXPRESSION_PRESETS = '/resources/expressions/'
+EXPRESSION_PRESETS_RIGIFY_NEW = '/resources/expressions/new_rigify_rig/'
 
 FACEIT_VERTEX_GROUPS = [
     'faceit_right_eyeball',
@@ -46,8 +47,14 @@ def get_retargeting_presets():
     return get_addon_dir() + RETARGET_PRESETS
 
 
-def get_expression_presets():
-    return get_addon_dir() + EXPRESSION_PRESETS
+def get_expression_presets(rig_type='FACEIT'):
+    '''Get the expressions presets folder for the rig type
+    @rig_type: value in ['FACEIT', 'RIGIFY_NEW']
+    '''
+    if rig_type in ('FACEIT', 'RIGIFY'):
+        return get_addon_dir() + EXPRESSION_PRESETS
+    elif rig_type == 'RIGIFY_NEW':
+        return get_addon_dir() + EXPRESSION_PRESETS_RIGIFY_NEW
 
 
 def get_rig_file():
@@ -62,15 +69,52 @@ def get_landmarks_file():
     return get_addon_dir() + LANDMARKS_FILE
 
 
+LIVE_MOCAP_DEFAULT_SETTINGS = {
+    'FACECAP': {
+        'address': '0.0.0.0',
+        'port': 9001,
+        'rotation_units': 'DEG',
+        'can_animate_head_rotation': True,
+        'can_animate_head_location': True,
+        'can_animate_eye_rotation': True,
+    },
+    'EPIC': {
+        'address': '0.0.0.0',
+        'port': 9001,
+        'rotation_units': 'RAD',
+        'can_animate_head_rotation': True,
+        'can_animate_head_location': False,
+        'can_animate_eye_rotation': True,
+    },
+    'TILE': {
+        'address': '0.0.0.0',
+        'port': 9001,
+        'rotation_units': 'DEG',
+        'rotation_units_variable': True,
+        'can_animate_head_rotation': True,
+        'can_animate_head_location': True,
+        'can_animate_eye_rotation': True,
+
+    },
+    'IFACIALMOCAP': {
+        'address': '0.0.0.0',
+        'port': 49983,
+        'rotation_units': 'DEG',
+        'can_animate_head_rotation': True,
+        'can_animate_head_location': True,
+        'can_animate_eye_rotation': True,
+    },
+    'A2F': {
+        'can_animate_head_rotation': False,
+        'can_animate_head_location': False,
+        'can_animate_eye_rotation': False,
+    },
+}
+
+
 def get_engine_settings(engine):
-    if engine == 'FACECAP':
-        engine_settings = bpy.context.scene.faceit_face_cap_mocap_settings
-        engine_settings.indices_order = 'FACECAP'
-    elif engine == 'EPIC':
-        engine_settings = bpy.context.scene.faceit_epic_mocap_settings
-        engine_settings.indices_order = 'ARKIT'
-    elif engine == 'A2F':
-        engine_settings = bpy.context.scene.faceit_a2f_mocap_settings
+    scene = bpy.context.scene
+    engine_settings = scene.faceit_live_mocap_settings.get(engine)
     return engine_settings
 
 
@@ -104,6 +148,22 @@ def get_phonemes_shape_data():
     return shapes.PHONEMES['Data']
 
 
+def get_rigify_bone_from_old_name(bone_name):
+    RIGIFY_OLD_TO_NEW = {
+        'lips.L': 'lip_end.L.001',
+        'lips.R': 'lip_end.R.001',
+        'tongue_master': 'tongue',
+        'tongue': 'tweak_tongue',
+        'tongue.001': 'tweak_tongue.001',
+        'tongue.002': 'tweak_tongue.002',
+        'tongue.003': 'tweak_tongue.003',
+        'nose.005': 'nose_end.004',
+        'chin.002': 'chin_end.001',
+        'eyes': 'eye_common',
+    }
+    return RIGIFY_OLD_TO_NEW.get(bone_name, bone_name)
+
+
 def get_shape_data_for_mocap_engine(mocap_engine=None):
     '''Takes the original expression name and returns the new index for the specified mocap engine
     @arkit_name: must be in ARKIT['Names']
@@ -113,16 +173,18 @@ def get_shape_data_for_mocap_engine(mocap_engine=None):
         return
     if mocap_engine == 'ARKIT':
         return get_arkit_shape_data()
-    if mocap_engine == 'FACECAP':
+    elif mocap_engine in ('FACECAP', 'TILE'):
         return get_face_cap_shape_data()
-    if mocap_engine == 'EPIC':
+    elif mocap_engine == 'EPIC':
         return get_epic_shape_data()
-    if mocap_engine == 'A2F':
+    elif mocap_engine == 'A2F':
         return get_a2f_shape_data()
+    elif mocap_engine == 'IFACIALMOCAP':
+        return get_face_cap_shape_data()
 
 
 def get_list_faceit_groups():
-
+    ''' Returns the faceit vertex group names. '''
     return FACEIT_VERTEX_GROUPS
 
 
@@ -135,11 +197,11 @@ def get_face_region_items(self, context):
 
 
 def get_regions_dict():
+    ''' Returns a dictionary with the shape names as keys and the region as value '''
     region_dict = {}
     for region, shapes in FACE_REGIONS_BASE.items():
         for shape in shapes:
             region_dict[shape] = region
-
     return region_dict
 
 
@@ -288,7 +350,6 @@ FACE_REGIONS_BASE = {
         'tongueCurlDown',
     ],
     'Other': [
-
     ]
 }
 
@@ -401,5 +462,3 @@ BAKE_MOD_TYPES = [
     'SIMPLE_DEFORM', 'SMOOTH', 'CORRECTIVE_SMOOTH', 'LAPLACIANSMOOTH', 'SURFACE_DEFORM', 'WARP', 'WAVE',
     'VOLUME_DISPLACE', 'DATA_TRANSFER', 'MESH_CACHE', 'MESH_SEQUENCE_CACHE', 'VERTEX_WEIGHT_EDIT', 'VERTEX_WEIGHT_MIX',
     'VERTEX_WEIGHT_PROXIMITY', 'CLOTH']
-
-# HIDE_MOD_TYPES = ['SURFACE_DEFORM']

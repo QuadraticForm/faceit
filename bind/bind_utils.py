@@ -51,9 +51,8 @@ def remove_weights_from_non_facial_geometry(obj, face_hull, faceit_vertex_groups
     ############## Selection errors #################
 
     # SelectionIslands finds and stores selected and non-selected islands
-    _selection_islands = mesh_utils.SelectionIslands(verts_to_check)
-
-    _selected_islands = _selection_islands.get_selected_islands()
+    selection_islands = mesh_utils.SelectionIslands(verts_to_check, selection_state=True)
+    _selected_islands = selection_islands.get_islands()
 
     def _keep_only_biggest_island(islands, select_value):
         '''keep only the biggest island, all smaller should be added to/ removed from selection/non-selection
@@ -69,6 +68,7 @@ def remove_weights_from_non_facial_geometry(obj, face_hull, faceit_vertex_groups
 
     # keep only the biggest island, the rest should be removed from selection
     _keep_only_biggest_island(_selected_islands, select_value=False)
+    bm.select_flush(True)
     bm.select_flush(False)
 
     bm.to_mesh(obj.data)
@@ -143,27 +143,22 @@ def data_transfer_vertex_groups(obj_from, obj_to, apply=True, method=''):
 
 def split_by_faceit_groups(obj):
     '''Split the object into parts by assigned faceit vertex groups'''
-
     futils.clear_object_selection()
     futils.set_active_object(obj.name)
-
-    mesh_utils.unselect_flush_vert_selection(obj)
     for grp in obj.vertex_groups:
         if 'faceit_' in grp.name:
             vs = vg_utils.get_verts_in_vgroup(obj, grp.name)
-            if len(vs) == len(obj.data.vertices):
-                # No need to split, the object is already separated
-                break
-            # Select all
+            if grp.name == 'faceit_main':
+                # get the vertices that are only in the main group
+                vs = [v for v in vs if len(v.groups) == 1]
             if not vs:
                 obj.vertex_groups.remove(grp)
                 continue
-            mesh_utils.select_vertices(obj, vs)
+            if len(vs) == len(obj.data.vertices):
+                # No need to split, the object is already separated
+                break
             bpy.ops.object.mode_set(mode='EDIT')
-            # Split Obj
-            if grp.name == 'faceit_main':
-                bpy.ops.mesh.select_linked(delimit=set())
-
+            mesh_utils.select_vertices(obj, vs, deselect_others=True)
             bpy.ops.mesh.separate(type='SELECTED')
             bpy.ops.object.mode_set()
 
@@ -195,44 +190,6 @@ def split_object(obj):
     return split_objects
 
 
-def check_main_faceit_group(main_obj, faceit_objects):
-
-    if any(['faceit_main' in ob.vertex_groups for ob in faceit_objects]):
-        # All good, go on
-        return True
-    else:
-        # Check if there are multiple vertex islands in face_obj
-        futils.clear_object_selection()
-        futils.set_active_object(main_obj.name)
-
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.mesh.reveal()
-        bpy.ops.object.mode_set(mode='OBJECT')
-
-        mesh_utils.select_vertices(main_obj)
-
-        bm = bmesh.new()
-        bm.from_mesh(main_obj.data)
-
-        bm.verts.ensure_lookup_table()
-        bm.faces.ensure_lookup_table()
-
-        # deselect all verts:
-        for f in bm.faces:
-            f.select = True
-        bm.select_flush(True)
-
-        _selection_islands = mesh_utils.SelectionIslands(bm.verts)
-        bm.free()
-
-        if len(_selection_islands.get_selected_islands()) > 1:
-            # bm.free()
-            return False
-        else:
-            vg_utils.assign_vertex_grp(main_obj, [v.index for v in main_obj.data.vertices], 'faceit_main')
-            return True
-
-
 def create_facial_hull(context, lm_obj):
     '''Duplicates Landmarks mesh and creates a convex hull object from it. Encompasses the face.'''
 
@@ -241,12 +198,10 @@ def create_facial_hull(context, lm_obj):
     futils.set_active_object(lm_obj.name)
     bpy.ops.object.duplicate_move()
     face_hull = context.object
-
     # apply the mirror mod on hull
     for mod in face_hull.modifiers:
         if mod.name == 'Mirror':
             bpy.ops.object.modifier_apply(modifier=mod.name)
-
     # make convex hull from the mesh
     bpy.ops.object.mode_set(mode='EDIT')
     bpy.ops.mesh.select_all(action='SELECT')

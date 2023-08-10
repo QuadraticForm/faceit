@@ -1,16 +1,24 @@
 import bpy
-
-from ..core.faceit_utils import get_faceit_objects_list, restore_scene_state, save_scene_state, ui_refresh_all, get_faceit_control_armature, set_active_object, get_object_mode_from_context_mode, clear_active_object, set_hide_obj
-from .mocap_base import MocapImporterBase
-from .mocap_importers import OSCLiveAnimator
-from .osc_receiver import QueueManager, Receiver, osc_queue
 from math import pi as PI
-from ..ctrl_rig.control_rig_utils import is_control_rig_connected
+
+from ..core.faceit_data import get_engine_settings, get_shape_data_for_mocap_engine
+from .mocap_base import MocapImporterBase
+from .mocap_importers import LiveAnimator
+from .osc_receiver import QueueManager, Receiver, osc_queue
+from ..core.faceit_utils import get_faceit_objects_list, restore_scene_state, save_scene_state, ui_refresh_all, get_faceit_control_armature, set_active_object, get_object_mode_from_context_mode, clear_active_object, set_hide_obj
+from ..core.pose_utils import get_edit_bone_roll
+from ..ctrl_rig.control_rig_utils import get_crig_objects_list, is_control_rig_connected
 
 queue_mgr: QueueManager = QueueManager()
 receiver: Receiver = Receiver(queue_mgr)
-live_animator: OSCLiveAnimator = OSCLiveAnimator()
+live_animator: LiveAnimator = LiveAnimator()
 reconnect_ctrl_rig: bool = False
+head_base_rotation = None
+head_base_location = None
+
+
+def get_head_base_transform():
+    return head_base_rotation, head_base_location
 
 
 class FACEIT_OT_ReceiverStart(bpy.types.Operator):
@@ -19,86 +27,77 @@ class FACEIT_OT_ReceiverStart(bpy.types.Operator):
     bl_label = "Start Receiver"
     bl_options = {'INTERNAL'}
 
-    # Store arkit names and respective target shapes here.
-    target_shapes = None
-    objects = []
-    shape_ref = []
-
-    # clear_recorded_data: bpy.props.BoolProperty(
-    #     name="Clear Recorded Data",
-    #     description="Are you sure you want to clear the recorded data?",
-    #     default=False,
-    #     options={'SKIP_SAVE'}
-    # )
-
-    # def invoke(self, context, event):
-    #     if osc_queue:
-    #         wm = context.window_manager
-    #         return wm.invoke_props_dialog(self)
-    #         return wm.invoke_confirm(self, event)
-    #         return wm.invoke_popup(self)
-    #     else:
-    #         return self.execute(context)
-
-    # def draw(self, context):
-    #     layout = self.layout
-    #     row = layout.row()
-    #     row.prop(self, "clear_recorded_data", icon='X')
-
     def execute(self, context):
         global receiver, live_animator, reconnect_ctrl_rig
-        # if self.clear_recorded_data:
-        #     bpy.ops.faceit.clear_live_data('EXECUTE_DEFAULT')
         state_dict = save_scene_state(context)
-
         live_animator.clear_animation_targets()
         scene = context.scene
         animate_loc = scene.faceit_osc_animate_head_location
         animate_rot = scene.faceit_osc_animate_head_rotation
         animate_shapes = scene.faceit_osc_animate_shapes
-
         if not (animate_loc or animate_rot or animate_shapes):
             self.report({'ERROR'}, "You need to enable at least one type of motion.")
             return {'CANCELLED'}
-
         live_animator.init_new_recording()
-        live_animator.set_rotation_units(context.scene.faceit_osc_rotation_units)
-
+        engine_settings = get_engine_settings(scene.faceit_live_source)
+        live_animator.set_rotation_units(engine_settings.rotation_units)
         # Shapes animation properties
+        live_animator.flip_animation = engine_settings.mirror_x
         live_animator.animate_shapes = animate_shapes
         live_animator.animate_head_location = animate_loc
         live_animator.animate_head_rotation = animate_rot
         if animate_shapes:
-            objects = get_faceit_objects_list()
-            target_shapes = context.scene.faceit_arkit_retarget_shapes
-            if not objects:
-                self.report({'WARNING'}, "You need to register the target objects in Setup tab.")
-            elif not target_shapes:
-                self.report({'WARNING'}, "You need to populate the ARKit target shapes list in the Shapes tab.")
+            live_animator.set_use_region_filter(scene.faceit_osc_use_region_filter)
+            live_animator.set_face_regions_dict(scene.faceit_osc_face_regions.get_active_regions())
+            live_animator.set_source_shape_reference(list(get_shape_data_for_mocap_engine(scene.faceit_live_source)))
+            # Get objects and target shapes
+            ctrl_rig = scene.faceit_control_armature
+            reconnect_ctrl_rig = False
+            if ctrl_rig:
+                if is_control_rig_connected(ctrl_rig):
+                    if scene.faceit_auto_disconnect_ctrl_rig:
+                        objects = get_crig_objects_list(ctrl_rig)
+                        target_shapes = ctrl_rig.faceit_crig_targets
+                        bpy.ops.faceit.remove_control_drivers('EXEC_DEFAULT')
+                        reconnect_ctrl_rig = True
+            if reconnect_ctrl_rig is False:
+                objects = get_faceit_objects_list()
+                target_shapes = scene.faceit_arkit_retarget_shapes
+                if not objects:
+                    self.report({'WARNING'}, "You need to register the target objects in Setup tab or select a valid control rig.")
+                elif not target_shapes:
+                    self.report({'WARNING'}, "You need to populate the ARKit target shapes list in the Shapes tab or select a valid control rig.")
 
             live_animator.set_shape_targets(
                 objects=objects,
-                target_shapes=target_shapes
+                retarget_shapes=target_shapes
             )
-            live_animator.set_use_region_filter(context.scene.faceit_osc_use_region_filter)
-            live_animator.set_face_regions_dict(context.scene.faceit_osc_face_regions.get_active_regions())
-
         # Head animation properties
         if animate_loc or animate_rot:
-            head_loc_multiplier = context.scene.faceit_osc_head_location_multiplier
-            head_obj = context.scene.faceit_head_target_object
-            head_bone_name = context.scene.faceit_head_sub_target
+            head_loc_multiplier = scene.faceit_osc_head_location_multiplier
+            head_obj = scene.faceit_head_target_object
+            head_bone_name = scene.faceit_head_sub_target
             head_bone_roll = 0
             if head_obj:
                 if head_obj.type == 'ARMATURE':
                     set_active_object(head_obj.name)
                     set_hide_obj(head_obj, False)
-                    bpy.ops.object.mode_set(mode='EDIT')
-                    edit_bone = head_obj.data.edit_bones.get(head_bone_name)
-                    if edit_bone:
-                        head_bone_roll = round(edit_bone.roll % (2 * PI), 3)
-                    bpy.ops.object.mode_set()
-
+                    pb = head_obj.pose.bones.get(head_bone_name)
+                    head_bone_roll = get_edit_bone_roll(pb)
+                    # bpy.ops.object.mode_set(mode='EDIT')
+                    # edit_bone = head_obj.data.edit_bones.get(head_bone_name)
+                    # if edit_bone:
+                    #     head_bone_roll = round(edit_bone.roll % (2 * PI), 3)
+                    # bpy.ops.object.mode_set()
+                else:
+                    global head_base_rotation, head_base_location
+                    if head_obj.rotation_mode == 'QUATERNION':
+                        head_base_rotation = head_obj.rotation_quaternion.copy()
+                    elif head_obj.rotation_mode == 'AXIS_ANGLE':
+                        head_base_rotation = head_obj.rotation_axis_angle[:]
+                    else:
+                        head_base_rotation = head_obj.rotation_euler.copy()
+                    head_base_location = head_obj.location.copy()
             live_animator.set_head_targets(
                 head_obj=head_obj,
                 head_bone_name=head_bone_name,
@@ -107,20 +106,13 @@ class FACEIT_OT_ReceiverStart(bpy.types.Operator):
             )
         if bpy.context.screen.is_animation_playing:
             bpy.ops.screen.animation_cancel()
-        ctrl_rig = context.scene.faceit_control_armature
-        if ctrl_rig:
-            if scene.faceit_auto_disconnect_ctrl_rig and is_control_rig_connected(ctrl_rig):
-                bpy.ops.faceit.remove_control_drivers('EXEC_DEFAULT')
-                reconnect_ctrl_rig = True
-
         try:
-            receiver.start(context.scene.faceit_osc_address, context.scene.faceit_osc_port)
+            receiver.start(scene.faceit_live_source, engine_settings.address, engine_settings.port)
         except OSError as e:
             print('Socket error:', e.strerror)
             self.report({'ERROR'}, 'This port is already in use!')
             return self.cancel(context)
-
-        context.scene.faceit_osc_receiver_enabled = True
+        scene.faceit_osc_receiver_enabled = True
         restore_scene_state(context, state_dict)
         return {'FINISHED'}
 
@@ -161,12 +153,13 @@ class FACEIT_OT_ReceiverStop(bpy.types.Operator):
         global reconnect_ctrl_rig
         if not osc_queue:
             self.report({'WARNING'}, "No recorded data found.")
+            bpy.ops.faceit.reset_expression_values('EXEC_DEFAULT')
+            bpy.ops.faceit.reset_head_pose('EXEC_DEFAULT')
         stop_receiver()
         ctrl_rig = context.scene.faceit_control_armature
         if ctrl_rig:
             if context.scene.faceit_auto_disconnect_ctrl_rig and reconnect_ctrl_rig:
                 bpy.ops.faceit.setup_control_drivers('EXEC_DEFAULT')
-        reconnect_ctrl_rig = False
         return {'FINISHED'}
 
 
@@ -180,17 +173,21 @@ class FACEIT_OT_ImportLiveMocap(MocapImporterBase, bpy.types.Operator):
     def poll(cls, context):
         return super().poll(context)
 
-    def _get_engine_specific_settings(self):
+    def _get_engine_specific_settings(self, context):
+        self.engine_name = context.scene.faceit_live_source
+        self.engine_settings = context.scene.faceit_live_mocap_settings.get(self.engine_name)
         self.animate_shapes = live_animator.animate_shapes
         self.animate_head_rotation = live_animator.animate_head_rotation
         self.animate_head_location = live_animator.animate_head_location
         self.can_import_head_rotation = bpy.context.scene.faceit_osc_animate_head_rotation
         self.can_import_head_location = bpy.context.scene.faceit_osc_animate_head_location
         self.use_region_filter = live_animator.use_region_filter
+        self.flip_animation = live_animator.flip_animation
         self.filename = ""
 
     def invoke(self, context, event):
-        self._get_engine_specific_settings()
+        global reconnect_ctrl_rig
+        self._get_engine_specific_settings(context)
         self.new_action_name = "LiveRecording"
         if not osc_queue:
             self.report({'WARNING'}, "No recorded data found.")
@@ -202,7 +199,8 @@ class FACEIT_OT_ImportLiveMocap(MocapImporterBase, bpy.types.Operator):
         # self._set_face_regions_dict()
         self.set_active_regions(context.scene.faceit_osc_face_regions.get_active_regions())
         if get_faceit_control_armature():
-            self.bake_to_control_rig = True
+            if reconnect_ctrl_rig:
+                self.bake_to_control_rig = True
             self.can_bake_control_rig = True
         else:
             self.can_bake_control_rig = False

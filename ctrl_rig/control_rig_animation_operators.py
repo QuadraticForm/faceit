@@ -46,6 +46,11 @@ class FACEIT_OT_BakeShapeKeysToControlRig(bpy.types.Operator):
         default=False,
         description='If this is enabled the amplify values will be inverted during bake, resulting in a one to one bake, even though amplify values are set to non-default values.'
     )
+    compensate_arkit_amplify_values: bpy.props.BoolProperty(
+        name='Compensate ARKit (Scene) Amplify Values',
+        default=True,
+        description='If this is enabled the amplify values will be inverted during bake, resulting in a one to one bake, even though amplify values are set to non-default values.'
+    )
     ignore_use_animation: BoolProperty(
         name='Ignore Mute Property',
         description='Bake all Animation, regardless of the use_animation property in the arkit expressions list',
@@ -125,43 +130,39 @@ class FACEIT_OT_BakeShapeKeysToControlRig(bpy.types.Operator):
             row.prop(self, 'resample_fcurves')
             row = col.row(align=True)
             row.prop(self, 'compensate_amplify_values')
+            row = col.row(align=True)
+            row.prop(self, 'compensate_arkit_amplify_values')
 
     def execute(self, context):
-
         scene = context.scene
-
         c_rig = futils.get_faceit_control_armature()
         futils.set_hide_obj(c_rig, False)
-
         target_objects = control_rig_utils.get_crig_objects_list(c_rig)
-
         crig_targets = c_rig.faceit_crig_targets
-
         all_shapes_on_target_objects = shape_key_utils.get_shape_key_names_from_objects(target_objects)
         if not all_shapes_on_target_objects:
             self.report({'ERROR'}, 'The target objects have no shape keys. Did you register the correct object(s)?')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         # The shape key action
         sk_action = scene.faceit_bake_sk_to_crig_action
 
         if not sk_action:
             self.report({'ERROR'}, 'Couldn\'t find a suitable action.')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
         if not any(['key_block' in fc.data_path for fc in sk_action.fcurves]):
             self.report(
                 {'WARNING'},
                 'You can only retarget Shape Key Actions to the control rig. The result may not be expected')
         if not sk_action.fcurves:
             self.report({'ERROR'}, 'There is no animation data in the source Action. Cancelled')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         if self.resample_fcurves:
             sk_action = sk_action.copy()
 
         # Get ctrl rig action
         c_rig_action = c_rig.animation_data.action
-
         if c_rig_action and self.overwrite_method == 'REPLACE':
             self.new_action_name = c_rig_action.name
             bpy.data.actions.remove(c_rig_action, do_unlink=True)
@@ -177,17 +178,15 @@ class FACEIT_OT_BakeShapeKeysToControlRig(bpy.types.Operator):
 
         # collect all existing fcurves that are relevant.
         arkit_curves_values = {}
-
         missing_animation = []
-
         frame_range = futils.get_action_frame_range(sk_action)
 
         for shape_item in crig_targets:
-
             if not self.ignore_use_animation:
                 if getattr(shape_item, 'use_animation', True) is False:
                     continue
-
+            if shape_item.name in ('eyeLookUpRight', 'eyeLookDownRight', 'eyeLookInRight', 'eyeLookOutRight'):
+                continue
             for target_shape in shape_item.target_shapes:
                 dp = 'key_blocks["{}"].value'.format(target_shape.name)
                 fc = sk_action.fcurves.find(dp)
@@ -199,7 +198,6 @@ class FACEIT_OT_BakeShapeKeysToControlRig(bpy.types.Operator):
                         #     self.report(
                         #         {'WARNING'},
                         #         'The shape key {} has not been found in registered objects.')  # .format(target_shape))
-
                         arkit_curves_values[shape_item.name] = {
                             'fcurve': fc,
                         }
@@ -224,28 +222,21 @@ class FACEIT_OT_BakeShapeKeysToControlRig(bpy.types.Operator):
             # col 1 holds the values
             data = kf_data[:, 1]
             data /= amplify_compensation
-
-            # pos, neg, all bezieht isch auf bone direction
-            # main_dir wird nur verwendet wenn all ist gesetzt
-
+            # pos, neg, all bone direction
             if range == 'pos':
                 pass
             elif range == 'neg':
                 max_range = min_range
-
             # negative and positive values for shape keys alloud.
             if range == 'all':
                 if main_dir == -1:
                     max_range = min_range
-
             if is_scale:
                 min_range = 1
             else:
                 min_range = 0
-
             # bring the keframe values from the max/min shape key values into the max/min bone range
             scaled_data = ((max_range - min_range) * ((data - sk_min)) / (sk_max - sk_min)) + min_range
-
             recombined_data = np.vstack((frames, scaled_data)).T
             return recombined_data
 
@@ -254,15 +245,11 @@ class FACEIT_OT_BakeShapeKeysToControlRig(bpy.types.Operator):
             # When the target bone uses scale then it needs to receive 3 FCurves (1 for each channel)
             if is_scale:
                 array_index = range(3)
-
             if not isinstance(array_index, Iterable):
                 array_index = [array_index]
-
             for i in array_index:
-
                 # Used to find the fcurve
                 fcurve_identifier = '{}_{}'.format(dp, i)
-
                 # Store the motion data for every fcurve in bone_motion_data:
                 motion_data = bone_motion_data.get(fcurve_identifier)
                 # If there is an entry in the list, then the fcurve controls multiple shapes (e.g pos and neg range)
@@ -279,40 +266,43 @@ class FACEIT_OT_BakeShapeKeysToControlRig(bpy.types.Operator):
                         'array_index': i,
                         'kf_data': new_kf_data,
                     }
-
         bone_motion_data = {}
 
         # Create the new fcurves for the control rig action
         for sk_name, curve_values in arkit_curves_values.items():
-
             fc = curve_values['fcurve']
-
             # Get keyframe_data from the shape key fcurve
             kf_data = fc_dr_utils.kf_data_to_numpy_array(fc)
             # Get the bone data for the new fcurve
             dp, array_index, max_range, min_range, value_range, main_dir, _bone_name = ctrl_data.get_bone_animation_data(
                 sk_name, c_rig)
-
             # The shape key min and max slider value
             sk_max = 1
             sk_min = 0
-
             is_scale = False
             if 'scale' in dp:
-                # min_range = 1
                 is_scale = True
-
             # Scale by Amp factor
+            amp_factor = 1.0
             if self.compensate_amplify_values:
-                amp_factor = getattr(crig_targets.get(sk_name, None), 'amplify')
-            else:
-                amp_factor = 1.0
-
+                amp_factor *= getattr(crig_targets.get(sk_name, None), 'amplify')
+            if self.compensate_arkit_amplify_values:
+                shape_item = scene.faceit_arkit_retarget_shapes.get(sk_name, None)
+                if shape_item:
+                    amp_factor *= shape_item.amplify
             # Scale the range of motion of the values to the range of motion of the bone
+            print(sk_name)
             scaled_kf_data = scale_to_new_range(
-                kf_data, min_range, max_range, sk_max, sk_min, value_range, main_dir, is_scale=is_scale,
-                amplify_compensation=amp_factor)
-
+                kf_data,
+                min_range,
+                max_range,
+                sk_max,
+                sk_min,
+                value_range,
+                main_dir,
+                is_scale=is_scale,
+                amplify_compensation=amp_factor
+            )
             populate_motion_data_dict(dp, array_index, scaled_kf_data, is_scale=is_scale)
 
         for _bone_name, motion_data in bone_motion_data.items():
@@ -322,15 +312,13 @@ class FACEIT_OT_BakeShapeKeysToControlRig(bpy.types.Operator):
             data_copy[:, 0] += self.frame_start
             dp = motion_data['data_path']
             array_index = motion_data['array_index']
-
             fc = fc_dr_utils.get_fcurve_from_bpy_struct(c_rig_action.fcurves, dp=dp, array_index=array_index)
             fc_dr_utils.populate_keyframe_points_from_np_array(fc, data_copy, add=True)
 
         scene.frame_start, scene.frame_end = (int(x) for x in futils.get_action_frame_range(c_rig_action))
-
         if not self.use_mocap_action:
             bpy.data.actions.remove(sk_action, do_unlink=True, do_ui_user=True)
-        return{'FINISHED'}
+        return {'FINISHED'}
 
 
 class FACEIT_OT_BakeControlRigToShapeKeysFromDriver(bpy.types.Operator):
@@ -351,7 +339,7 @@ class FACEIT_OT_BakeControlRigToShapeKeysFromDriver(bpy.types.Operator):
     target_action_name: StringProperty()
     source_action_name: StringProperty()
 
-    @classmethod
+    @ classmethod
     def poll(cls, context):
         if context.mode in ('OBJECT', 'POSE'):
             c_rig = futils.get_faceit_control_armature()
@@ -381,11 +369,11 @@ class FACEIT_OT_BakeControlRigToShapeKeysFromDriver(bpy.types.Operator):
 
         if not shape_key_utils.has_shape_keys(main_obj):
             self.report({'ERROR'}, 'The registered main object has no shape keys. Did you register the correct object(s)?')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         if not c_rig.animation_data:
             self.report({'WARNING'}, 'The Control Rig has no Action activated. Cancelled operation.')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         source_action = bpy.data.actions.get(self.source_action_name)
         if not source_action:
@@ -420,7 +408,7 @@ class FACEIT_OT_BakeControlRigToShapeKeysFromDriver(bpy.types.Operator):
 
         self.report({'INFO'}, 'Motion baked to Shape Keys in {} seconds'.format(round(time.time() - time_start, 2)))
 
-        return{'FINISHED'}
+        return {'FINISHED'}
 
 
 def get_enum_non_sk_actions(self, context):
@@ -563,7 +551,7 @@ class FACEIT_OT_BakeControlRigToShapeKeys(bpy.types.Operator):
         options={'SKIP_SAVE', }
     )
 
-    @classmethod
+    @ classmethod
     def poll(cls, context):
         if context.mode in ('OBJECT', 'POSE'):
             c_rig = futils.get_faceit_control_armature()
@@ -673,7 +661,7 @@ class FACEIT_OT_BakeControlRigToShapeKeys(bpy.types.Operator):
         @sk_min: shape key min
         @bone_min: new minimum - the minimum range of motion for the bone
         @bone_max: new maximum - the max range of motion for the bone
-        @range: (string) in [pos, neg, all] 
+        @range: (string) in [pos, neg, all]
         @main_dir: the direction of movement for the target bone. Needed to negate the values
         '''
         # Split the frames from animation values
@@ -726,17 +714,17 @@ class FACEIT_OT_BakeControlRigToShapeKeys(bpy.types.Operator):
         all_shapes_on_target_objects = shape_key_utils.get_shape_key_names_from_objects(target_objects)
         if not all_shapes_on_target_objects:
             self.report({'ERROR'}, 'The target objects have no shape keys. Did you register the correct object(s)?')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         # The rig action
         rig_action = c_rig.animation_data.action
         if not rig_action:
             self.report({'ERROR'}, 'You need to choose a valid source action.')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         if not rig_action.fcurves:
             self.report({'ERROR'}, f'There is no animation data in the source Action {rig_action.name}.')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         if self.resample_fcurves:
             rig_action = rig_action.copy()
@@ -759,7 +747,7 @@ class FACEIT_OT_BakeControlRigToShapeKeys(bpy.types.Operator):
         target_shapes_dict = retarget_list_utils.get_target_shapes_dict(crig_targets)
         if not target_shapes_dict:
             self.report({'ERROR'}, 'No retarget shapes found. Initialize in Shapes panel.')
-            return{'CANCELLED'}
+            return {'CANCELLED'}
 
         if self.bake_method == 'SLOW':
             bpy.ops.faceit.bake_control_rig_to_shape_keys_from_drivers(
@@ -768,7 +756,7 @@ class FACEIT_OT_BakeControlRigToShapeKeys(bpy.types.Operator):
                 source_action_name=rig_action.name,
                 target_action_name=sk_action.name
             )
-            return{'FINISHED'}
+            return {'FINISHED'}
 
         # def get_bone_fcurve():
 
@@ -907,4 +895,4 @@ class FACEIT_OT_BakeControlRigToShapeKeys(bpy.types.Operator):
         scene.frame_start, scene.frame_end = (int(x) for x in futils.get_action_frame_range(sk_action))
         scene.faceit_mocap_action = sk_action
 
-        return{'FINISHED'}
+        return {'FINISHED'}

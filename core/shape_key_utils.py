@@ -37,6 +37,20 @@ def has_shape_keys(obj):
         return False
 
 
+def set_slider_max(shape_key, value, highest_value=True):
+    if highest_value:
+        if value < shape_key.slider_max:
+            return
+    shape_key.slider_max = max(max(shape_key.slider_min + 0.001, 1.0), value)
+
+
+def set_slider_min(shape_key, value, lowest_value=True):
+    if lowest_value:
+        if value > shape_key.slider_min:
+            return
+    shape_key.slider_min = min(min(shape_key.slider_max - 0.001, 0.0), value)
+
+
 def set_rest_position_shape_keys(objects=None, expressions_filter=None) -> None:
     '''Set all shape keys to default 0.0 value'''
     auto_key = bpy.context.scene.tool_settings.use_keyframe_insert_auto
@@ -80,15 +94,23 @@ def get_all_shape_key_actions():
             actions.append(a)
     return actions
 
+def get_shape_keys_from_objects(objects=None) -> list:
+    '''Get a list that holds all shape keys from the given objects'''
+    shape_keys = []
+    if not objects:
+        objects = futils.get_faceit_objects_list()
+    for obj in objects:
+        if has_shape_keys(obj):
+            shape_keys.extend(obj.data.shape_keys.key_blocks)
+    return shape_keys
 
 def get_shape_key_names_from_objects(objects=None) -> list:
+    '''Get a list that holds all shape key names from the given objects'''
     shape_key_names = []
     if not objects:
         objects = futils.get_faceit_objects_list()
-
-    for obj in objects:
-        if has_shape_keys(obj):
-            shape_key_names.extend([sk.name for sk in obj.data.shape_keys.key_blocks if sk.name != 'Basis'])
+    shape_keys = get_shape_keys_from_objects(objects)
+    shape_key_names.extend([sk.name for sk in shape_keys if sk.name != 'Basis'])
     return list(set(shape_key_names))
 
 

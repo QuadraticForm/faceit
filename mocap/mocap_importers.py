@@ -1,15 +1,18 @@
+import bpy
 import csv
 import json
+
 from .mocap_base import MocapBase
 from ..core.faceit_data import get_face_cap_shape_data, get_epic_shape_data, get_a2f_shape_data
-import numpy as np
+from ..core.shape_key_utils import set_slider_max
 
 
 class FaceCapImporter(MocapBase):
 
     def _initialize_mocap_settings(self):
         self.set_rotation_units('DEG')
-        self.shape_ref = list(get_face_cap_shape_data().keys())
+        self.set_source_shape_reference(list(get_face_cap_shape_data().keys()))
+        # self.shape_ref = list(get_face_cap_shape_data().keys())
 
     def parse_animation_data(self, data, frame_start=0, record_frame_rate=1000):
         self.clear_animation_data()
@@ -43,13 +46,16 @@ class FaceCapImporter(MocapBase):
 class A2FMocapImporter(MocapBase):
 
     def _initialize_mocap_settings(self):
-        self.shape_ref = list(get_a2f_shape_data().keys())
+        self.set_source_shape_reference(list(get_a2f_shape_data().keys()))
+        # self.shape_ref = list(get_a2f_shape_data().keys())
 
     def parse_animation_data(self, data, frame_start=0, record_frame_rate=60):
         self.clear_animation_data()
         with open(data, 'r') as f:
             data = json.load(f)
             for i, shape_key_values in enumerate(data['weightMat']):
+                if shape_key_values is None:
+                    continue
                 current_frame = frame_start + i * self.fps / record_frame_rate
                 self.animation_timestamps.append(current_frame)
                 # Blendshapes Motion
@@ -61,7 +67,8 @@ class EpicMocapImporter(MocapBase):
 
     def _initialize_mocap_settings(self):
         self.set_rotation_units('RAD')
-        self.shape_ref = list(get_epic_shape_data().keys())
+        self.set_source_shape_reference(list(get_epic_shape_data().keys()))
+        # self.shape_ref = list(get_epic_shape_data().keys())
 
     def parse_animation_data(self, data, frame_start=0, record_frame_rate=60):
         self.clear_animation_data()
@@ -92,7 +99,7 @@ class EpicMocapImporter(MocapBase):
                     self.eye_L_animation_lists.append([float(v) for v in row[57:60]])
                     self.eye_R_animation_lists.append([float(v) for v in row[60:63]])
 
-    def _convert_timecode_to_frames(self, timecode, framerate, start=None):
+    def _convert_timecode_to_frames(self, timecode, framerate, start=None, recorded_framerate=60):
         '''This function converts an SMPTE timecode into frames
         @timecode [str]: format hh:mm:ss:ff
         @start [str]: optional timecode to start at
@@ -102,7 +109,7 @@ class EpicMocapImporter(MocapBase):
             @value [str, int, float]: either timecode or frames
             '''
             if isinstance(value, str):  # value seems to be a timestamp
-                _zip_ft = zip((3600, 60, 1, 1 / framerate), value.split(':'))
+                _zip_ft = zip((3600, 60, 1, 1 / recorded_framerate), value.split(':'))
                 return sum(f * float(t) for f, t in _zip_ft)
             elif isinstance(value, (int, float)):  # frames
                 return value / framerate
@@ -118,13 +125,8 @@ class EpicMocapImporter(MocapBase):
         return _frames(_seconds(timecode) - _seconds(start))
 
 
-class OSCLiveAnimator(MocapBase):
+class LiveAnimator(MocapBase):
     '''Animate the target values live and populate animations from recorded data.'''
-    # TILE, FC
-    osc_source_engine = 'FC'
-
-    def _initialize_mocap_settings(self):
-        self.shape_ref = list(get_face_cap_shape_data().keys())
 
     def init_new_recording(self):
         self.initial_location_offset = None
@@ -136,7 +138,7 @@ class OSCLiveAnimator(MocapBase):
         _timestamp, address, params = data
         if self.animate_shapes and address == '/W':
             value = params[1]
-            name = self.shape_ref[params[0]]
+            name = self.source_shape_reference[params[0]]
             self._set_shape_key_values(name, value)
         elif self.animate_head_rotation and address == '/HR':  # head rotation.
             self._set_head_rotation(params)
@@ -147,20 +149,15 @@ class OSCLiveAnimator(MocapBase):
             self._set_head_location(params)
 
     def _set_shape_key_values(self, name, value):
-        # Animate the specified shape key on all registered objects
-        for obj in self.objects:
-            keys = obj.data.shape_keys.key_blocks
-            shape_item = self.target_shapes[name]
-            target_shapes = shape_item.target_shapes
-            if hasattr(shape_item, 'region'):
-                region = shape_item.region.lower()
-                if self.active_regions_dict[region] is False:
-                    pass
-                else:
-                    for ts in target_shapes:
-                        shapekey = keys.get(ts.name)
-                        if shapekey:
-                            shapekey.value = value
+        '''Animate the specified shape key on all registered objects'''
+        target_shapes = self.target_shapes_dict[name]
+        amplify = self.retarget_shapes[name].amplify
+        for sk in target_shapes:
+            val = value * amplify
+            # if self.dynamic_sk_ranges:
+            #     set_slider_max(sk, val)
+            # set_slider_min(sk, )
+            sk.value = val
 
     def _set_head_rotation(self, value):
         obj = self.head_obj
@@ -180,11 +177,8 @@ class OSCLiveAnimator(MocapBase):
             else:
                 obj.location = new_loc
 
-    # ----------- RECORDER FUNCTIONS --------------
-    # - Initialize recordings, populate fcurves etc.
-    # ---------------------------------------------
-
     def parse_animation_data(self, data, frame_start=0, record_frame_rate=1000):
+        '''Parse the recorded messages into readable animation data'''
         if not data:
             return
         self.clear_animation_data()

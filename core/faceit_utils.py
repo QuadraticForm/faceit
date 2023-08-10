@@ -191,29 +191,72 @@ def remove_item_from_collection_prop(collection, item):
         collection.remove(item)
 
 
+def find_collection_in_children(collection, name):
+    ''' Recursively searches for a collection in the children of a collection'''
+    if collection.name == name:
+        return collection
+    for child in collection.children:
+        found = find_collection_in_children(child, name)
+        if found:
+            return found
+
+
+# def traverse_tree(t):
+#     yield t
+#     for child in t.children:
+#         yield from traverse_tree(child)
+
+
+# def parent_lookup():
+#     parent_lookup_dict = {}
+#     coll = bpy.context.view_layer.layer_collection
+#     for coll in traverse_tree(coll):
+#         for c in coll.children.keys():
+#             parent_lookup_dict.setdefault(c, coll.name)
+#     return parent_lookup_dict
+
+
+def get_layer_collection(collection_name):
+    master_collection = bpy.context.view_layer.layer_collection
+    return find_collection_in_children(master_collection, collection_name)
+
+
 def get_faceit_collection(force_access=True, create=True):
-
-    faceit_collection = bpy.data.collections.get('Faceit_Collection')
-    context = bpy.context
-    if not faceit_collection:
+    '''Returns the faceit collection, if it does not exist, it creates it'''
+    collection_name = 'Faceit_Collection'
+    faceit_collection = bpy.data.collections.get(collection_name)
+    if faceit_collection is None:
         if create:
-            faceit_collection = bpy.data.collections.new(name='Faceit_Collection')
-            context.scene.collection.children.link(faceit_collection)
+            faceit_collection = bpy.data.collections.new(name=collection_name)
         else:
-            return
-
+            return None
+    faceit_layer_collection = get_layer_collection(collection_name)
+    if faceit_layer_collection is None:
+        bpy.context.scene.collection.children.link(faceit_collection)
+        faceit_layer_collection = get_layer_collection(collection_name)
     if force_access:
-        # Get collection in viewlayer to toggle exclude and visibility options
-        master_collection = context.view_layer.layer_collection
-        view_layer_faceit_collection = master_collection.children.get('Faceit_Collection')
-
-        if view_layer_faceit_collection:
-            # make sure the collection is included in viewlayer
-            view_layer_faceit_collection.exclude = False
-            view_layer_faceit_collection.hide_viewport = False
         faceit_collection.hide_viewport = False
-
+        faceit_layer_collection.exclude = False
+        faceit_layer_collection.hide_viewport = False
+    # Print parent of active collection
+    # coll_parents = parent_lookup()
+    # print("Parent of {} is {}".format(
+    #     collection_name,
+    #     coll_parents.get(collection_name))
+    # )
     return faceit_collection
+
+
+def is_collection_visible(context, collection):
+    '''Returns True if the collection is visible'''
+    if collection.hide_viewport:
+        return False
+    collection_name = collection.name
+    master_collection = context.view_layer.layer_collection
+    view_layer_collection = find_collection_in_children(master_collection, collection_name)
+    if not view_layer_collection:
+        return False
+    return not (view_layer_collection.exclude and view_layer_collection.hide_viewport)
 
 
 def set_hide_obj(obj, hide):
@@ -288,26 +331,33 @@ def get_faceit_control_armature():
     return bpy.context.scene.faceit_control_armature
 
 
-def is_faceit_armature(rig):
-    if rig.type == 'ARMATURE' in rig.name:
-        if all([b in FACEIT_BONES for b in rig.data.bones]):
-            return True
-    return False
-
-
 def get_faceit_armature(force_original=False):
     '''Get the faceit armature object.'''
     rig = bpy.context.scene.faceit_armature
-    if rig is not None:
-        if rig.name not in bpy.context.scene.objects:
-            rig = None
-    if rig is None or force_original:
-        for obj in bpy.data.objects:
-            if obj.type == 'ARMATURE':
-                if is_faceit_original_armature(obj):
-                    rig = obj
-                    break
+    if rig is not None and force_original is True:
+        if not is_faceit_original_armature(rig):
+            return None
     return rig
+
+
+def get_rig_type(rig):
+    """
+    Get the type of this rig.
+        @rig: the rig object
+        Returns: 'FACEIT', 'RIGIFY', 'RIGIFY_NEW' or None
+    """
+    rig = get_faceit_armature()
+    if rig is None:
+        return None
+    if is_faceit_original_armature(rig):
+        return 'FACEIT'
+    # Is this a rigify structure?
+    if len(set((b.name for b in rig.data.bones)).intersection(FACEIT_BONES)) > len(FACEIT_BONES) // 4:
+        if "lip_end.L.001" in rig.pose.bones:
+            return 'RIGIFY_NEW'
+        else:
+            return 'RIGIFY'
+    return None
 
 
 def is_faceit_original_armature(rig):
@@ -315,19 +365,39 @@ def is_faceit_original_armature(rig):
     if rig.name == 'FaceitRig':
         return True
     if all([b.name in FACEIT_BONES for b in rig.data.bones]):
-        if len(rig.data.bones) >= len(FACEIT_BONES):
-            return True
+        return True
     return False
 
 
-def is_other_rigify_armature():
+def is_rigify_armature(rig):
+    '''Check if the Armature is created with Rigify.'''
+    # print(len(set((b.name for b in rig.data.bones)).intersection(FACEIT_BONES)))
+    if 'rig_id' in rig.data:
+        if len(rig.data['rig_id']) == 16:
+            return True
+    # Check if at least half of the Faceit (Rigify) bones are in the armature.#
+    if len(set((b.name for b in rig.data.bones)).intersection(FACEIT_BONES)) > len(FACEIT_BONES) // 4:
+        return True
+    return False
+
+
+def using_rigify_armature():
     '''Check if the user wants to use another Rigify face rig for generating the expressions.'''
     scene = bpy.context.scene
+    if not scene.faceit_use_rigify_armature:
+        return False
     rig = scene.faceit_armature
-    if bpy.context.scene.faceit_use_rigify_armature and rig:
-        if not is_faceit_original_armature(rig):
+    if rig:
+        if is_rigify_armature(rig):
             return True
     return False
+
+
+def is_armature_bound_to_registered_objects(rig):
+    '''Check whether the rig is bound to the registered objects. -> does an armature modifier exist?'''
+    for obj in get_faceit_objects_list():
+        if rig.name in [mod.object.name for mod in obj.modifiers if mod.type == 'ARMATURE' and mod.object is not None]:
+            return True
 
 
 def get_median_pos(locations):

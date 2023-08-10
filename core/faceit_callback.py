@@ -1,5 +1,5 @@
 import bpy
-from ..landmarks.landmarks_utils import set_front_view, unlock_3d_view
+from ..landmarks.landmarks_utils import unlock_3d_view
 
 
 class FACEIT_OT_SubscribeSettings(bpy.types.Operator):
@@ -68,6 +68,12 @@ def faceit_active_object_callback(context):
     active_object = bpy.context.active_object
     if active_object is None:
         return
+    if active_object.name == "facial_landmarks":
+        if bpy.context.preferences.addons["faceit"].preferences.use_vertex_size_scaling:
+            bpy.context.preferences.themes[0].view_3d.vertex_size = bpy.context.preferences.addons["faceit"].preferences.landmarks_vertex_size
+    else:
+        if bpy.context.preferences.addons["faceit"].preferences.use_vertex_size_scaling:
+            bpy.context.preferences.themes[0].view_3d.vertex_size = bpy.context.preferences.addons["faceit"].preferences.default_vertex_size
     # set the active control rig
     if active_object.get("ctrl_rig_version"):
         scene.faceit_control_armature = active_object

@@ -2,7 +2,7 @@ import io
 import time
 from contextlib import redirect_stdout
 import bpy
-from bpy.props import BoolProperty, IntProperty
+from bpy.props import BoolProperty, IntProperty, FloatProperty
 from mathutils import Vector
 
 from ..core.modifier_utils import add_faceit_armature_modifier, get_faceit_armature_modifier, set_bake_modifier_item
@@ -19,14 +19,10 @@ class FACEIT_OT_SmartBind(bpy.types.Operator):
     bl_label = "Bind"
     bl_options = {'UNDO', 'INTERNAL', 'REGISTER'}
 
-    # -------- DEBUG OPTIONS -----------
     show_advanced_settings: BoolProperty(
         name="Show Advanced Options",
         default=False,
     )
-    # duplicate: BoolProperty(
-    #     default=True
-    # )
     bind_scale_objects: BoolProperty(
         name="Scale Geometry",
         description="Temporarilly scales the geometry for Binding. Use if Auto Weights fails.",
@@ -39,36 +35,68 @@ class FACEIT_OT_SmartBind(bpy.types.Operator):
         max=1000,
         min=1,
     )
-    keep_vertex_groups: BoolProperty(
-        name="Keep Vertex Groups",
-        description="If this is unchecked Faceit will remove all Vertex Groups except the Faceit groups. This destroys other armature bindings.",
-        default=True)
-    keep_shape_keys: BoolProperty(
-        name="Keep Shape keys",
-        description="If this is unchecked Faceit will remove all Shape Keys from the bind object. This can destroy the looks of your meshes and aniamtions.",
-        default=True
-    )
-    hide_other_armature_modifers: BoolProperty(
-        name="Disable Other Armature Modifiers",
-        description="Other Armature Modifiers can disturb the Faceit results. Use them only if you know what you are doing.",
-        default=False,)
-    auto_weight: BoolProperty(
-        name="Auto Weight",
-        description="Apply Automatic Weights to the Main Object(s)",
-        default=True
-    )
     smart_weights: BoolProperty(
         name="Smart Weights",
-        description="Improves weights for most characters, by detecting rigid skull vertices and assigning them to DEF-face group",
+        description="Improves weights for most characters, by detecting rigid skull/body vertices and assigning them to DEF-face group",
         default=True)
-    transfer_weights: BoolProperty(
-        name="Transfer Weights",
-        description="Transfer the Weights to all Geometry without Faceit Vertex Groups",
+    smooth_main_edges: BoolProperty(
+        name="Smooth Main borders/edge",
+        description="Ensures a smooth transition between face and body/rigid geometry.",
         default=True
     )
-    secondary_weights: BoolProperty(
-        name="Secondary Weights",
-        description="Overwrite Faceit Vertex Groups with specific bone weights (Eyes, Teeth, Rigid...)",
+    main_smooth_factor: FloatProperty(
+        name="Smooth Factor",
+        description="Factor to smooth by.",
+        default=0.5,
+        min=0.0,
+        max=1.0,
+    )
+    main_smooth_steps: IntProperty(
+        name="Smooth Steps",
+        description="Number of smoothing steps (Iterations).",
+        default=10,
+        min=1,
+        max=10000
+    )
+    main_smooth_expand: FloatProperty(
+        name="Smooth Expand",
+        description="Expand/contract weights during smoothing",
+        default=0.1,
+        min=-1.0,
+        max=1.0,
+    )
+    weight_eyes: BoolProperty(
+        name="Eyes",
+        description="Overwrite Faceit Vertex Groups with specific bone weights (Eyes)",
+        default=True
+    )
+    weight_teeth: BoolProperty(
+        name="Teeth",
+        description="Overwrite Faceit Vertex Groups with specific bone weights (Teeth)",
+        default=True
+    )
+    weight_tongue: BoolProperty(
+        name="Tongue",
+        description="Auto weight the tongue geometry separately.",
+        default=True
+    )
+    transfer_weights: BoolProperty(
+        name="Transfer Weights",
+        description="Transfer the Main Weights to hair/secondary Geometry",
+        default=True
+    )
+    tranfer_to_hair_only: BoolProperty(
+        name="Transfer to Hair Only",
+        description="Automatically find hair geometry. All geometry that is not assigned to Faceit vertex groups.",
+        default=False,
+    )
+    clean_eyelashes_weights: BoolProperty(
+        name="Clean Eyelashes Weights",
+        description="Remove all non-lid deform groups from the eyelashes gemometry. Only available if the eyelashes have been defined in setup.",
+        default=True,)
+    remove_rigid_weights: BoolProperty(
+        name="Clear Rigid Geometry",
+        description="Removes all weights from geometry assigned to the faceit_rigid group.",
         default=True
     )
     keep_split_objects: BoolProperty(
@@ -78,8 +106,55 @@ class FACEIT_OT_SmartBind(bpy.types.Operator):
     )
     smooth_bind: BoolProperty(
         name="Apply Smoothing",
-        description="Applies automatic weight-smoothing after binding.",
+        description="Applies automatic weight-smoothing after binding. Affects all deform bones.",
         default=True
+    )
+    smooth_factor: FloatProperty(
+        name="Smooth Factor",
+        description="Factor to smooth by.",
+        default=0.5,
+        min=0.0,
+        max=1.0,
+    )
+    smooth_steps: IntProperty(
+        name="Smooth Steps",
+        description="Number of smoothing steps (Iterations).",
+        default=1,
+        min=1,
+        max=10000
+    )
+    smooth_expand: FloatProperty(
+        name="Smooth Expand",
+        description="Expand/contract weights during smoothing",
+        default=0.0,
+        min=-1.0,
+        max=1.0,
+    )
+    smooth_expand_eyelashes: BoolProperty(
+        name="Smooth Expand Eyelashes",
+        description="Smooth the eyelashes in an extra pass.",
+        default=True,
+    )
+    eyelashes_smooth_factor: FloatProperty(
+        name="Smooth Factor",
+        description="Factor to smooth by.",
+        default=0.5,
+        min=0.0,
+        max=1.0,
+    )
+    eyelashes_smooth_steps: IntProperty(
+        name="Smooth Steps",
+        description="Number of smoothing steps (Iterations).",
+        default=2,
+        min=1,
+        max=10000
+    )
+    eyelashes_smooth_expand: FloatProperty(
+        name="Smooth Expand",
+        description="Expand/contract weights during smoothing",
+        default=1.0,
+        min=-1.0,
+        max=1.0,
     )
     remove_old_faceit_weights: BoolProperty(
         name="Remove Old Faceit Weights",
@@ -92,6 +167,11 @@ class FACEIT_OT_SmartBind(bpy.types.Operator):
         default=True
     )
 
+    found_faceit_eyelashes_grp = False
+    found_faceit_eyes_grp = False
+    found_faceit_teeth_grp = False
+    found_faceit_tongue_grp = False
+
     @classmethod
     def poll(cls, context):
         rig = futils.get_faceit_armature(force_original=True)
@@ -100,34 +180,89 @@ class FACEIT_OT_SmartBind(bpy.types.Operator):
                 return True
 
     def invoke(self, context, event):
+        objects = futils.get_faceit_objects_list()
+        self.found_faceit_eyelashes_grp = bool(vg_utils.get_objects_with_vertex_group(
+            "faceit_eyelashes", objects=objects, get_all=False))
+        if not self.found_faceit_eyelashes_grp:
+            self.smooth_expand_eyelashes = self.clean_eyelashes_weights = False
+        # teeth_grps = ("faceit_upper_teeth", "faceit_lower_teeth")
+        # for grp in teeth_grps:
+        #     self.found_faceit_teeth_grp = bool(vg_utils.get_objects_with_vertex_group(
+        #         grp, objects=objects, get_all=False))
+        # if not self.found_faceit_teeth_grp:
+        #     self.weight_teeth = False
         wm = context.window_manager
         return wm.invoke_props_dialog(self)
 
     def draw(self, context):
         layout = self.layout
         col_bind = layout.column()
-        # row = col_bind.row()
-        # row.label(text='OPTIONS')
         row = col_bind.row(align=True)
         row.prop(self, "bind_scale_objects", icon='EMPTY_DATA')
         if self.bind_scale_objects:
             row.prop(self, "bind_scale_factor")
-        # row = col_bind.row()
-        # row.prop(self, "hide_other_armature_modifers")
         row = col_bind.row()
         row.prop(self, "show_advanced_settings", icon="COLLAPSEMENU")
         if self.show_advanced_settings:
             row = col_bind.row()
-            row.label(text="ADVANCED")
-            row = col_bind.row()
-            row.prop(self, "auto_weight")
             row.prop(self, "smart_weights")
+            if self.smart_weights:
+                row = col_bind.row()
+                row.prop(self, "smooth_main_edges")
+                if self.smooth_main_edges:
+                    col_bind.use_property_split = True
+                    row = col_bind.row()
+                    row.prop(self, "main_smooth_factor")
+                    row = col_bind.row()
+                    row.prop(self, "main_smooth_steps")
+                    row = col_bind.row()
+                    row.prop(self, "main_smooth_expand")
+                    col_bind.use_property_split = False
+                    row = col_bind.row()
             row = col_bind.row()
-            row.prop(self, "transfer_weights")
-            row.prop(self, "secondary_weights")
+            row.prop(self, "remove_old_faceit_weights")
+            row.prop(self, "remove_rigid_weights")
+            row = col_bind.row()
+            row.prop(self, "weight_eyes")
+            row.prop(self, "weight_teeth")
+            row = col_bind.row()
+            row.prop(self, "weight_tongue")
+            row = col_bind.row()
+            row.label(text="Note: Assign the Groups in Setup.")
             row = col_bind.row()
             row.prop(self, "smooth_bind")
-            row.prop(self, "remove_old_faceit_weights")
+            if self.smooth_bind:
+                col_bind.use_property_split = True
+                row = col_bind.row()
+                row.prop(self, "smooth_factor")
+                row = col_bind.row()
+                row.prop(self, "smooth_steps")
+                row = col_bind.row()
+                row.prop(self, "smooth_expand")
+                col_bind.use_property_split = False
+            row = col_bind.row()
+            row.prop(self, "transfer_weights")
+            if self.transfer_weights:
+                row.prop(self, "tranfer_to_hair_only")
+                row = col_bind.row()
+                row.prop(self, "clean_eyelashes_weights")
+                row.prop(self, "smooth_expand_eyelashes")
+                if not self.found_faceit_eyelashes_grp:
+                    row.enabled = False
+                    row.active = False
+                    row = col_bind.row()
+                    row.label(text="No Eyelashes Found.")
+
+                if self.smooth_expand_eyelashes:
+                    col_bind.use_property_split = True
+                    row = col_bind.row()
+                    row.prop(self, "eyelashes_smooth_factor")
+                    row = col_bind.row()
+                    row.prop(self, "eyelashes_smooth_steps")
+                    row = col_bind.row()
+                    row.prop(self, "eyelashes_smooth_expand")
+                    col_bind.use_property_split = False
+                    row = col_bind.row()
             row = col_bind.row()
             row.prop(self, "make_single_user")
             row.prop(self, "keep_split_objects")
@@ -137,7 +272,6 @@ class FACEIT_OT_SmartBind(bpy.types.Operator):
         hide_modifiers = [
             'ARRAY', 'BEVEL', 'BOOLEAN', 'BUILD', 'DECIMATE', 'EDGE_SPLIT', 'MASK', 'MIRROR', 'MULTIRES', 'REMESH',
             'SCREW', 'SKIN', 'SOLIDIFY', 'SUBSURF', 'TRIANGULATE', 'WIREFRAME']
-        # 'MESH_DEFORM', 'SURFACE_DEFORM', 'CAST', 'SMOOTH', 'LAPLACIANSMOOTH', 'WARP', 'WAVE','LATTICE']
         # --------------- RELEVANT OBJECTS -------------------
         start_time = time.time()
         faceit_objects = futils.get_faceit_objects_list()
@@ -163,12 +297,12 @@ class FACEIT_OT_SmartBind(bpy.types.Operator):
         auto_key = scene.tool_settings.use_keyframe_insert_auto
         use_auto_normalize = scene.tool_settings.use_auto_normalize
         scene.tool_settings.use_auto_normalize = False
+        transform_orientation = scene.transform_orientation_slots[0].type
+        scene.transform_orientation_slots[0].type = 'GLOBAL'
         mesh_select_mode = scene.tool_settings.mesh_select_mode[:]
         scene.tool_settings.mesh_select_mode = (True, True, True)
-
         scene.tool_settings.use_keyframe_insert_auto = False
         pivot_setting = scene.tool_settings.transform_pivot_point
-
         simplify_value = scene.render.use_simplify
         simplify_subd = scene.render.simplify_subdivision
         scene.render.use_simplify = True
@@ -318,7 +452,7 @@ class FACEIT_OT_SmartBind(bpy.types.Operator):
         # | - Data Transfer (hair, beard,brows etc.) +
         # | - Secondary Assigns (eyes, teeth, tongue)
         # -------------------------------------------------------
-        self._bind(
+        bind_success = self._bind(
             context,
             bind_objects=dup_face_objects,
             rig=rig,
@@ -364,12 +498,9 @@ class FACEIT_OT_SmartBind(bpy.types.Operator):
 
             show_mod_dict = obj_mod_show_dict.get(obj.name)
             if show_mod_dict:
-                for mod, show_value in show_mod_dict.items():
-                    mod = obj.modifiers.get(mod)
+                for mod_name, show_value in show_mod_dict.items():
+                    mod = obj.modifiers.get(mod_name)
                     if mod:
-                        if self.hide_other_armature_modifers:
-                            if mod.type == 'ARMATURE' and mod.object != rig:
-                                continue
                         mod.show_viewport = show_value
             sk_data_dict = obj_sk_dict.get(obj)
             if sk_data_dict:
@@ -398,6 +529,7 @@ class FACEIT_OT_SmartBind(bpy.types.Operator):
         futils.set_hidden_state_object(lm_obj, True, True)
         scene.tool_settings.transform_pivot_point = pivot_setting
         context.scene.tool_settings.use_auto_normalize = use_auto_normalize
+        scene.transform_orientation_slots[0].type = transform_orientation
         context.space_data.overlay.show_relationship_lines = False
         scene.tool_settings.use_keyframe_insert_auto = auto_key
         scene.render.use_simplify = simplify_value
@@ -407,14 +539,19 @@ class FACEIT_OT_SmartBind(bpy.types.Operator):
         futils.clear_object_selection()
         futils.set_active_object(rig.name)
         bpy.ops.outliner.orphans_purge()
-        print("Bound in {}".format(round(time.time() - start_time, 2)))
+        if bind_success:
+            self.report({'INFO'}, "Faceit Binding Successful")
+            print("Bound in {}".format(round(time.time() - start_time, 2)))
+        else:
+            self.report({'ERROR'}, "Faceit Binding Failed. See Console for more info.")
         return {'FINISHED'}
 
-    def _bind(self, context, bind_objects, rig, lm_obj):
+    def _bind(self, context, bind_objects, rig, lm_obj) -> bool:
         """Start the Faceit Binding progress on the passed bind objects
         @face_obj: the main object, can also be retrieved from bind_objects (main group)
         @bind_objects: the bind objects. Should have cleared vertex groups except for faceit groups
         @rig: the armature object to bind to
+        Returns True if binding was successful, False if not
         """
         faceit_vertex_groups = [
             "faceit_right_eyeball",
@@ -425,21 +562,17 @@ class FACEIT_OT_SmartBind(bpy.types.Operator):
             "faceit_lower_teeth",
             "faceit_tongue",
             "faceit_rigid",
-            # "faceit_facial_hair",
-            # "faceit_main",
-            # "faceit_eyelashes"
         ]
-
+        # "faceit_eyelashes", "faceit_facial_hair", "faceit_main",
         # ----------------------- SPLIT OBJECTS BEFORE BIND ----------------------------
-        # | - Split by Faceit Group assignments + put all non-assigned in one obj
-        # | -
+        # | - Split by Faceit Group assignments
+        # | - Sort objects for different bind methods
         # ------------------------------------------------------------------------------
         bind_problem = False
-
         auto_weight_objects = []
         transfer_weights_objects = []
+        eyelashes_objects = []
         secondary_bind_objects = []
-
         all_split_objects = []
         split_bind_objects_dict = {}
 
@@ -447,22 +580,18 @@ class FACEIT_OT_SmartBind(bpy.types.Operator):
             # Unlock all groups:
             for grp in obj.vertex_groups:
                 grp.lock_weight = False
-
             split_objects = bind_utils.split_by_faceit_groups(obj)
             all_split_objects.extend(split_objects)
             split_bind_objects_dict[obj] = split_objects
-
         # Remove double entries
         all_split_objects = list(set(all_split_objects))
-
         futils.clear_object_selection()
-
         for s_obj in all_split_objects:
             if "faceit_main" in s_obj.vertex_groups:  # or "faceit_tongue" in s_obj.vertex_groups:
-                auto_weight_objects.append(s_obj)
-                continue
+                if len(s_obj.vertex_groups) == 1:
+                    auto_weight_objects.append(s_obj)
+                    continue
             # Remove all vertex groups that don't cover the whole split surface.
-            # Left over groups from split operation.
             for grp in s_obj.vertex_groups:
                 if 'faceit_' in grp.name:
                     vs = vg_utils.get_verts_in_vgroup(s_obj, grp.name)
@@ -472,9 +601,10 @@ class FACEIT_OT_SmartBind(bpy.types.Operator):
                         s_obj.vertex_groups.remove(grp)
             if any([grp.name in faceit_vertex_groups for grp in s_obj.vertex_groups]):
                 secondary_bind_objects.append(s_obj)
-            else:
+            elif "faceit_facial_hair" in s_obj.vertex_groups or not self.tranfer_to_hair_only:
                 transfer_weights_objects.append(s_obj)
-
+                if "faceit_eyelashes" in s_obj.vertex_groups:
+                    eyelashes_objects.append(s_obj)
         if self.keep_split_objects:
             print("------- SPLIT OBJECTS ----------")
             print(all_split_objects)
@@ -484,25 +614,21 @@ class FACEIT_OT_SmartBind(bpy.types.Operator):
             print(transfer_weights_objects)
             print("------- Secondary Bind ----------")
             print(secondary_bind_objects)
-
         # --------------- AUTO WEIGHT ---------------------------
         # | - ...
         # -------------------------------------------------------
-        if self.auto_weight:
-            start_time = time.time()
-
-            bind_problem, warning = self._auto_weight_objects(
-                auto_weight_objects,
-                rig,
-            )
-            if warning:
-                self.report(
-                    {'WARNING'},
-                    "Automatic Weights failed! {}".format(
-                        "Try to activate 'Scale Geometry' in Bind settings."
-                        if not self.bind_scale_objects else " Try to use a higher Scale factor."))
-            print("Auto Weights in {}".format(round(time.time() - start_time, 2)))
-
+        start_time = time.time()
+        bind_problem, warning = self._auto_weight_objects(
+            auto_weight_objects,
+            rig,
+        )
+        if warning:
+            self.report(
+                {'WARNING'},
+                "Automatic Weights failed! {}".format(
+                    "Try to activate 'Scale Geometry' in Bind settings."
+                    if not self.bind_scale_objects else " Try to use a higher Scale factor."))
+        print("Auto Weights in {}".format(round(time.time() - start_time, 2)))
         # ----------------------- SMART WEIGHTS ---------------------------
         # | Remove weights out of the face.
         # -----------------------------------------------------------------
@@ -514,81 +640,139 @@ class FACEIT_OT_SmartBind(bpy.types.Operator):
                 rig,
                 lm_obj,
                 faceit_vertex_groups,
-                smooth_weights=self.smooth_bind
+                smooth_weights=self.smooth_main_edges
             )
-
             print("Smart Weights in {}".format(round(time.time() - start_time, 2)))
-        # return
+
+        # brow_bones = ['DEF-brow.B.L', 'DEF-brow.B.L.001', 'DEF-brow.B.L.002', 'DEF-brow.B.L.003',
+        #               'DEF-brow.B.R', 'DEF-brow.B.R.001', 'DEF-brow.B.R.002', 'DEF-brow.B.R.003']
+        # self._smooth_bone_selection(
+        #     auto_weight_objects,
+        #     rig,
+        #     brow_bones,
+        #     factor=.5,
+        #     steps=4,
+        #     expand=-1.0,
+        # )
         # ----------------------- TRANSFER WEIGHTS ---------------------------
         # | Transfer Weights from auto bound geo to secondary geo (hair,...)
         # --------------------------------------------------------------------
         if self.transfer_weights:
-            start_time = time.time()
-
             if transfer_weights_objects:
+                start_time = time.time()
                 self._transfer_weights(
                     auto_weight_objects,
                     transfer_weights_objects,
                 )
-            else:
-                self.report({'WARNING'}, "Can\"t find any vertices to transfer weights to")
-
-            print("Transfer Weights in {}".format(round(time.time() - start_time, 2)))
-        # ----------------------- TRANSFER WEIGHTS ---------------------------
-        # | Transfer Weights from auto bound geo to secondary geo (hair,...)
+                if eyelashes_objects:
+                    # remove all non lid deform groups from eyelashes
+                    lid_bones = [
+                        "DEF-lid.B.L",
+                        "DEF-lid.B.L.001",
+                        "DEF-lid.B.L.002",
+                        "DEF-lid.B.L.003",
+                        "DEF-lid.T.L",
+                        "DEF-lid.T.L.001",
+                        "DEF-lid.T.L.002",
+                        "DEF-lid.T.L.003",
+                        "DEF-lid.B.R",
+                        "DEF-lid.B.R.001",
+                        "DEF-lid.B.R.002",
+                        "DEF-lid.B.R.003",
+                        "DEF-lid.T.R",
+                        "DEF-lid.T.R.001",
+                        "DEF-lid.T.R.002",
+                        "DEF-lid.T.R.003",
+                    ]
+                    if self.clean_eyelashes_weights:
+                        for obj in eyelashes_objects:
+                            for vgroup in obj.vertex_groups:
+                                if "DEF" in vgroup.name:
+                                    if vgroup.name not in lid_bones:
+                                        obj.vertex_groups.remove(vgroup)
+                    # smooth expand eyelashes weights
+                    if self.smooth_expand_eyelashes:
+                        self.smooth_selected_weights(
+                            eyelashes_objects,
+                            rig,
+                            lid_bones,
+                            factor=self.eyelashes_smooth_factor,
+                            steps=self.eyelashes_smooth_steps,
+                            expand=self.eyelashes_smooth_expand,
+                        )
+                print("Transfer Weights in {}".format(round(time.time() - start_time, 2)))
+        # ----------------------- USER WEIGHTS ---------------------------
+        # | Faceit groups -> eyes, teeth, tongue, rigid
         # --------------------------------------------------------------------
+        if self.weight_eyes:
+            eye_grps = ("faceit_left_eyeball", "faceit_right_eyeball",
+                        "faceit_left_eyes_other", "faceit_right_eyes_other")
+            for vgroup in eye_grps:
+                new_grp = "DEF_eye.L" if "left" in vgroup else "DEF_eye.R"
+                self.overwrite_faceit_group(all_split_objects, vgroup, new_grp)
 
-        if self.secondary_weights:
-            start_time = time.time()
-            # if secondary_bind_objects:
-            self._assign_secondary_weighting(
-                faceit_vertex_groups,
-                objects=all_split_objects,
-                rig=rig,
-            )
-            print("Secondary Weights in {}".format(round(time.time() - start_time, 2)))
+        if self.weight_teeth:
+            teeth_grps = ("faceit_upper_teeth", "faceit_lower_teeth")
+            for vgroup in teeth_grps:
+                if "lower_teeth" in vgroup:
+                    if rig.pose.bones.get("DEF-teeth.B"):
+                        new_grp = "DEF-teeth.B"
+                    else:
+                        self.report(
+                            {'WARNING'},
+                            "Lower Teeth bone 'DEF - teeth.B' does not exist. Create the bone manually or specify Teeth Vertex Groups and regenerate the Rig.")
+                        continue
+                if "upper_teeth" in vgroup:
+                    if rig.pose.bones.get("DEF-teeth.T"):
+                        new_grp = "DEF-teeth.T"
+                    else:
+                        self.report(
+                            {'WARNING'},
+                            "Uppper Teeth bone 'DEF - teeth.T' does not exist. Create the bone manually or specify Teeth Vertex Groups and regenerate the Rig.")
+                        continue
+                self.overwrite_faceit_group(all_split_objects, vgroup, new_grp)
+
+        if self.weight_tongue:
+            objects_with_vgroup = vg_utils.get_objects_with_vertex_group(
+                "faceit_tongue", objects=secondary_bind_objects, get_all=True)
+            tongue_bones = [
+                "DEF-tongue",
+                "DEF-tongue.001",
+                "DEF-tongue.002"
+            ]
+            self._auto_weight_selection_to_bones(objects_with_vgroup, rig, tongue_bones, "faceit_tongue")
 
         # ----------------------- MERGE SPLIT OBJECTS ---------------------------
-
         if bpy.context.mode != 'OBJECT':
             bpy.ops.object.mode_set()
-
         for obj, split_objects in split_bind_objects_dict.items():
-
             futils.clear_object_selection()
-
             for s_obj in split_objects:
                 if s_obj:
-
                     if self.keep_split_objects:
                         debug_duplicate = s_obj.copy()
                         debug_duplicate.data = s_obj.data.copy()
                         context.scene.collection.objects.link(debug_duplicate)
                         debug_duplicate.name = debug_duplicate.name + "_debug"
-
                     futils.set_active_object(s_obj.name)
-
-            futils.set_active_object(obj.name)
-            bpy.ops.object.join()
+            if len(split_objects) > 1:
+                futils.set_active_object(obj.name)
+                bpy.ops.object.join()
             add_faceit_armature_modifier(obj, rig)
 
+        # ----------------------- SMOOTH ALL ---------------------------
+        # | Smooth pass on all bind objects
+        # -----------------------------------------------------------------
         if self.smooth_bind:
             self._smooth_weights(
                 objects=bind_objects,
                 rig=rig,
             )
-
         # ----------------------- REMOVE RIGID ---------------------------
         # | Remove Weights from Verts with faceit_rigid group (pass only faceit_rigid)
         # -----------------------------------------------------------------
-
-        start_time = time.time()
-        self._assign_secondary_weighting(
-            ["faceit_rigid", ],
-            objects=bind_objects,
-            rig=rig,
-        )
-        print("Removed Rigid Verts in {}".format(round(time.time() - start_time, 2)))
+        if self.remove_rigid_weights:
+            self.overwrite_faceit_group(bind_objects, "faceit_rigid", new_grp=None)
 
         for obj in bind_objects:
             for grp in obj.vertex_groups:
@@ -598,14 +782,9 @@ class FACEIT_OT_SmartBind(bpy.types.Operator):
         return not bind_problem
 
     def _auto_weight_objects(self, auto_weight_objects, rig):
-        """
-        Apply Automatic Weights to main geometry.
-        Optionally apply Smart Weighting and Smoothing
-        Split Main geo
-        """
-        bind_problem = False
+        '''Apply Automatic Weights to main geometry.'''
+        auto_weight_problem = False
         return_warning = []
-
         # Disable bones for auto weighting
         no_auto_weight = [
             "DEF-tongue",
@@ -620,175 +799,164 @@ class FACEIT_OT_SmartBind(bpy.types.Operator):
             bone = rig.data.bones.get(b)
             if bone:
                 bone.use_deform = False
-
         warning = "Warning: Bone Heat Weighting: failed to find solution for one or more bones"
-
         futils.clear_object_selection()
-
         for obj in auto_weight_objects:
             obj.select_set(state=True)
-
         futils.set_active_object(rig.name)
-
         _stdout_warning = ""
-
         stdout = io.StringIO()
-
         with redirect_stdout(stdout):
-
             bpy.ops.object.parent_set(type='ARMATURE_AUTO', keep_transform=True)
-
         stdout.seek(0)
         _stdout_warning = stdout.read()
         del stdout
-
         if warning in _stdout_warning:
             return_warning.append(
                 warning + " for object {}. Check the Docs for work-arounds".format(auto_weight_objects))
-            bind_problem = True
-
+            auto_weight_problem = True
         # Reenable Auto weight for bones
         for b in no_auto_weight:
             bone = rig.data.bones.get(b)
             if bone:
                 bone.use_deform = True
+        return auto_weight_problem, return_warning
 
-        return not bind_problem, return_warning
-
-    def _apply_smart_weighting(
-            self, context, objects, rig, lm_obj, faceit_vertex_groups, smooth_weights=True):
-        '''Remove weights outside of the face.'''
-
+    def _apply_smart_weighting(self, context, objects, rig, lm_obj, faceit_vertex_groups, smooth_weights=True):
+        '''Remove weights outside of the facial region (landmarks).'''
         # Create the facial hull object encompassing the facial geometry.
         bpy.ops.object.mode_set(mode='OBJECT')
         face_hull = bind_utils.create_facial_hull(context, lm_obj)
-
         for obj in objects:
-
             futils.clear_object_selection()
             futils.set_active_object(obj.name)
-
             deform_groups = vg_utils.get_deform_bones_from_armature(rig)
 
             if any([grp in obj.vertex_groups for grp in deform_groups]):
                 bind_utils.remove_weights_from_non_facial_geometry(obj, face_hull, faceit_vertex_groups)
             else:
                 print("found no auto weights on object {}. Skipping smart weights".format(obj.name))
-
         # remove the hull helper object
         bpy.data.objects.remove(face_hull)
-
         for obj in objects:
-
             futils.clear_object_selection()
             rig.select_set(state=True)
             futils.set_active_object(obj.name)
-
             # Make Def-face the active vertex group before normalizing
             face_grp_idx = obj.vertex_groups.find("DEF-face")
             if face_grp_idx != -1:
                 obj.vertex_groups.active_index = face_grp_idx
-
             use_mask = obj.data.use_paint_mask_vertex
             obj.data.use_paint_mask_vertex = False
-
             bpy.ops.object.mode_set(mode='WEIGHT_PAINT')
             if smooth_weights:
-
-                # ------------------------- SMOOTH  WEIGHTS -------------------------------
+                # ------------------------- SMOOTH BORDER WEIGHTS -------------------------------
                 if face_grp_idx != -1:
                     bpy.ops.object.vertex_group_smooth(group_select_mode='ACTIVE',
-                                                       factor=0.5,
-                                                       repeat=10,
-                                                       expand=0.1,
+                                                       factor=self.main_smooth_factor,
+                                                       repeat=self.main_smooth_steps,
+                                                       expand=self.main_smooth_expand,
                                                        )
-
-                bpy.ops.object.vertex_group_smooth(group_select_mode='BONE_DEFORM',
-                                                   factor=0.5,
-                                                   repeat=1,
-                                                   expand=0,
-                                                   )
                 obj.data.use_paint_mask_vertex = use_mask
-
             # ------------------------- NORMALIZE WEIGHTS -------------------------------
             # lock and normalize - so the facial influences get restricted
-
             if face_grp_idx != -1:
                 bpy.ops.object.vertex_group_normalize_all(lock_active=True)
             bpy.ops.object.vertex_group_clean(group_select_mode='ALL')
             bpy.ops.object.mode_set()
-            # if vg_utils.vertex_group_sanity_check(obj):
-            #     vg_utils.remove_zero_weights_from_verts(obj, thresh=0.0001)
-            #     vg_utils.remove_unused_vertex_groups_thresh(obj, thres=0.0001)
 
     def _smooth_weights(self, objects, rig):
-
+        '''Smooth weights on all objects.'''
         for obj in objects:
-
             futils.clear_object_selection()
             rig.select_set(state=True)
-
             futils.set_active_object(obj.name)
-
             use_mask = obj.data.use_paint_mask_vertex
             obj.data.use_paint_mask_vertex = False
-
             bpy.ops.object.mode_set(mode='WEIGHT_PAINT')
-
             bpy.ops.object.vertex_group_smooth(group_select_mode='BONE_DEFORM',
-                                               factor=0.5,
-                                               repeat=1,
-                                               expand=0,
+                                               factor=self.smooth_factor,
+                                               repeat=self.smooth_steps,
+                                               expand=self.smooth_expand,
                                                )
-
             obj.data.use_paint_mask_vertex = use_mask
-
             bpy.ops.object.mode_set()
 
+    def smooth_selected_weights(
+            self, objects, rig, filter_bone_names=None, filter_vertex_group=None, factor=.5, steps=2, expand=1.5):
+        '''Smooth weights for a specific selection. Choose from specific bones and/or vertices.'''
+        if bpy.context.mode != 'OBJECT':
+            bpy.ops.object.mode_set()
+        group_select_mode = 'BONE_DEFORM'
+        if filter_bone_names is not None:
+            group_select_mode = 'BONE_SELECT'
+            futils.clear_object_selection()
+            futils.set_active_object(rig.name)
+            bpy.ops.object.mode_set(mode='POSE')
+            # enable deform bones layer
+            bpy.ops.pose.select_all(action='DESELECT')
+            any_selected = False
+            for bone in filter_bone_names:
+                pbone = rig.pose.bones.get(bone)
+                if pbone:
+                    pbone.bone.select = True
+                    any_selected = True
+                else:
+                    continue
+            if not any_selected:
+                print("Can't find the specified bones.")
+                return
+        bpy.ops.object.mode_set(mode='OBJECT')
+        for obj in objects:
+            add_faceit_armature_modifier(obj, rig)
+            futils.clear_object_selection()
+            futils.set_active_object(rig.name)
+            futils.set_active_object(obj.name)
+
+            if filter_vertex_group is not None:
+                vs = vg_utils.get_verts_in_vgroup(obj, filter_vertex_group)
+                if not vs:
+                    continue
+                # select all verts in grp
+                mesh_utils.select_vertices(obj, vs, deselect_others=True)
+                obj.data.use_paint_mask_vertex = True
+                use_mask = obj.data.use_paint_mask_vertex
+
+            # smooth weights
+            bpy.ops.object.mode_set(mode='WEIGHT_PAINT')
+            bpy.ops.object.vertex_group_smooth(
+                group_select_mode=group_select_mode,
+                factor=factor,
+                repeat=steps,
+                expand=expand
+            )
+            if filter_vertex_group is not None:
+                obj.data.use_paint_mask_vertex = use_mask
+            bpy.ops.object.mode_set(mode='OBJECT')
+
     def _transfer_weights(self, transfer_from_objects, transfer_to_objects):
-
-        # ----------------------- TRANSFER WEIGHTS ---------------------------
-
         if transfer_to_objects and transfer_from_objects:
-
             for from_obj in transfer_from_objects:
                 futils.clear_object_selection()
-
                 for obj in transfer_to_objects:
-
                     faceit_groups_per_obj = set(vg_utils.get_faceit_vertex_grps(obj))
-
                     # get objects that were not bound and are registered in faceit objects
                     bind_utils.data_transfer_vertex_groups(obj_from=from_obj, obj_to=obj, method='NEAREST')
-
-                    # remove all non lid deform groups
-                    if "faceit_eyelashes" in obj.vertex_groups:
-                        for vgroup in obj.vertex_groups:
-                            if "DEF" in vgroup.name:
-                                if "lid" not in vgroup.name:
-                                    obj.vertex_groups.remove(vgroup)
-
                     # remove all faceit groups that were transferred from the auto bind objects. These will messup re-binding.
                     for grp in set(vg_utils.get_faceit_vertex_grps(obj)) - faceit_groups_per_obj:
                         false_assigned_faceit_group = obj.vertex_groups.get(grp)
                         obj.vertex_groups.remove(false_assigned_faceit_group)
-
         bpy.ops.object.mode_set()
 
-    def _auto_weight_selection_to_bones(self, auto_weight_objects, rig, bones, vgroup='ALL'):
+    def _auto_weight_selection_to_bones(
+            self, auto_weight_objects, rig, bones, faceit_group="faceit_tongue"):
         '''Bind a vertex selection to specific bones'''
-
         if bpy.context.mode != 'OBJECT':
             bpy.ops.object.mode_set()
         futils.clear_object_selection()
-        # select rig
         futils.set_active_object(rig.name)
         bpy.ops.object.mode_set(mode='POSE')
-        # enable deform bones layer
-
         bpy.ops.pose.select_all(action='DESELECT')
-
-        # select bones
         any_selected = False
         for bone in bones:
             pbone = rig.pose.bones.get(bone)
@@ -797,152 +965,58 @@ class FACEIT_OT_SmartBind(bpy.types.Operator):
                 any_selected = True
             else:
                 continue
-
         if not any_selected:
-            self.report({'WARNING'}, "Tongue bones do not exist. Regenerate the rig.")
+            self.report({'WARNING'}, f"{faceit_group} bones do not exist. Regenerate the rig.")
             return
-
         bpy.ops.object.mode_set(mode='OBJECT')
-
         for obj in auto_weight_objects:
-
-            # select object
             futils.clear_object_selection()
-
             futils.set_active_object(rig.name)
             futils.set_active_object(obj.name)
 
-            if vgroup == "ALL":
-                vs = obj.data.vertices
-            else:
-                vs = vg_utils.get_verts_in_vgroup(obj, vgroup)
-
+            vs = vg_utils.get_verts_in_vgroup(obj, faceit_group)
             if not vs:
                 continue
-
             # Add Faceit_Armature mod
-            # obj.modifiers
             add_faceit_armature_modifier(obj, rig)
-
             # remove all weights of other bones that got weighted in autoweighting process
-
-            vg_utils.remove_vgroups_from_verts(obj, vs=vs, filter_keep="faceit_tongue")
-
+            vg_utils.remove_vgroups_from_verts(obj, vs=vs, filter_keep=faceit_group)
             if vg_utils.vertex_group_sanity_check(obj):
                 vg_utils.remove_zero_weights_from_verts(obj)
                 vg_utils.remove_unused_vertex_groups_thresh(obj)
 
             # select all verts in tongue grp
-            mesh_utils.unselect_flush_vert_selection(obj)
-            mesh_utils.select_vertices(obj, vs=vs)
+            mesh_utils.select_vertices(obj, vs, deselect_others=True)
 
             # go weightpaint
             bpy.ops.object.mode_set(mode='WEIGHT_PAINT')
-
             use_mask = obj.data.use_paint_mask_vertex
             obj.data.use_paint_mask_vertex = True
-
             bpy.ops.paint.weight_from_bones(type='AUTOMATIC')
-
-            # smooth tongue deform
+            # smooth deform
             bpy.ops.object.vertex_group_smooth(
                 group_select_mode='BONE_SELECT', factor=.5, repeat=2, expand=1.5)
-
             # reset settings
             obj.data.use_paint_mask_vertex = use_mask
-
             bpy.ops.object.mode_set(mode='OBJECT')
 
-    def _assign_secondary_weighting(self, faceit_vertex_groups, objects, rig):
-
-        def overwrite_faceit_group(obj, faceit_vertex_group, new_grp=""):
-            """
-            bind user defined vertices to respective bones with constant weight of 1 on all vertices
-            @obj - the object holding the vertex group defined by user
-            @faceit_vertex_group - the user defined groups holding all vertices that should be assigned to new group
-            i.e. faceit_teeth
-            @new_grp - the name of the newly assigned vertex group
-            """
-            # get all vertices in the faceit group
+    def overwrite_faceit_group(self, objects, faceit_vertex_group, new_grp=""):
+        """
+        bind user defined vertices to respective bones with constant weight of 1 on all vertices
+        @objects - the bind objects
+        @faceit_vertex_group - the user defined groups holding all vertices that should be assigned to new group
+        @new_grp - the name of the new vertex group
+        """
+        # get all vertices in the faceit group
+        objects_with_vgroup = vg_utils.get_objects_with_vertex_group(
+            faceit_vertex_group, objects=objects, get_all=True)
+        for obj in objects_with_vgroup:
             vs = vg_utils.get_verts_in_vgroup(obj, faceit_vertex_group)
             if not vs:
-                return
-
+                continue
             vg_utils.remove_all_weight(obj, vs)
-
-            # assign new group weight or...
             if new_grp:
-                if new_grp != "rigid":
-                    # indices needed for group assignment
-                    vs = [v.index for v in vs]
-                    vg_utils.assign_vertex_grp(obj, vs, new_grp)
-                else:
-                    pass
-
-        eye_grps = [
-            "faceit_left_eyeball",
-            "faceit_right_eyeball",
-            "faceit_left_eyes_other",
-            "faceit_right_eyes_other"
-        ]
-        teeth_grps = [
-            "faceit_upper_teeth",
-            "faceit_lower_teeth"
-        ]
-        rigid_grps = [
-            "faceit_rigid",
-        ]
-
-        tongue_grps = [
-            "faceit_tongue",
-        ]
-
-        for vgroup in faceit_vertex_groups:
-
-            secondary_objects = vg_utils.get_objects_with_vertex_group(vgroup, objects=objects, get_all=True)
-
-            for obj in secondary_objects:
-
-                new_grp = ""
-                if vgroup in eye_grps:
-                    new_grp = "DEF_eye.L" if "left" in vgroup else "DEF_eye.R"
-
-                if vgroup in teeth_grps:
-
-                    if "lower_teeth" in vgroup:
-                        if rig.pose.bones.get("DEF-teeth.B"):
-                            new_grp = "DEF-teeth.B"
-                        else:
-                            self.report(
-                                {'WARNING'},
-                                "Lower Teeth bone 'DEF - teeth.B' does not exist. Create the bone manually or specify Teeth Vertex Groups and regenerate the Rig.")
-                            continue
-                    if "upper_teeth" in vgroup:
-                        if rig.pose.bones.get("DEF-teeth.T"):
-                            new_grp = "DEF-teeth.T"
-                        else:
-                            self.report(
-                                {'WARNING'},
-                                "Uppper Teeth bone 'DEF - teeth.T' does not exist. Create the bone manually or specify Teeth Vertex Groups and regenerate the Rig.")
-                            continue
-
-                if vgroup in rigid_grps:  # or vgroup in tongue_grps:
-                    new_grp = "rigid"
-
-                if new_grp:
-                    overwrite_faceit_group(obj, vgroup, new_grp)
-
-                # ----------------------- BIND TONGUE ---------------------------
-
-                if vgroup in tongue_grps:  # or vgroup in tongue_grps:
-
-                    tongue_bones = [
-                        "DEF-tongue",
-                        "DEF-tongue.001",
-                        "DEF-tongue.002"
-                    ]
-
-                    self._auto_weight_selection_to_bones(secondary_objects, rig, tongue_bones, "faceit_tongue")
+                vg_utils.assign_vertex_grp(obj, [v.index for v in vs], new_grp)
 
 
 class FACEIT_OT_PairArmature(bpy.types.Operator):

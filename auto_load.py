@@ -1,10 +1,10 @@
-import importlib
+# by JacquesLucke / Animation Nodes
+import bpy
+import typing
 import inspect
 import pkgutil
-import typing
+import importlib
 from pathlib import Path
-
-import bpy
 
 __all__ = (
     "init",

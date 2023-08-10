@@ -5,6 +5,7 @@ from bpy.props import BoolProperty, StringProperty
 
 
 from ..shape_keys.corrective_shape_keys_utils import CORRECTIVE_SK_ACTION_NAME
+from ..core.vgroup_utils import get_verts_in_vgroup
 from ..core.modifier_utils import get_modifiers_of_type
 from ..panels.draw_utils import draw_text_block
 from ..core.pose_utils import is_pb_in_rest_pose
@@ -13,33 +14,13 @@ from ..core import mesh_utils
 
 WARNINGS_OUT = {
     'MIRROR': 'Object holds a MIRROR modifier. This can lead to problems in binding and/or baking! You should apply it first. If you need to preserve shape keys, check out the \'Apply Modifiers\' operator in bake tab/extra utils.',
-    'MAIN_GROUP': 'The Main vertex group should only be assigned to one connected surface. Please make sure that it only contains linked vertices!',
+    'MAIN_GROUP': 'The Main vertex group should only be assigned to one connected surface. Please make sure that the vertex group \'faceit_main\' only contains linked vertices (vertices that are connected by edges)! Use the Select Linked operator in Edit Mode to ensure connected surfaces are selected and click the Main button again. ',
+    'MULTIPLE_MAIN': 'This object among others has the Main vertex group assigned. Please make sure that the vertex group \'faceit_main\' is only assigned to one object. ',
     'TRANSFORMS_ANIM': 'The Object has animation keyframes on transform channels. This might leat to problems in binding. Clear the keyframes or disable the action.',
     'ARMATURE_POSITION': 'The Object is bound to another armature. This can lead to problems in binding. Put the armature to Rest Position (before creating the landmarks!).',
     'SURFACE_DEFORM': 'The Object is bound to another object with a Surface Deform modifier. Either remove the binding / modifier or register the source object instead of this object.',
     'SHAPEKEYS': 'The Object has animated shape keys. This can lead to unexpected behaviour during baking. Consider to remove the action for animated shape keys or even setting the shape keys to their default values.',
-    # 'AMBIGUOUS_TARGETS': 'Some shapes have been set as targets for other source shapes.'
 }
-
-
-def get_island_count(obj):
-    bm = bmesh.new()
-    bm.from_mesh(obj.data)
-
-    bm.verts.ensure_lookup_table()
-    bm.faces.ensure_lookup_table()
-
-    # deselect all verts:
-    for f in bm.faces:
-        f.select = False
-    bm.select_flush(False)
-
-    # SelectionIslands finds and stores selected and non-selected islands
-    island_count = mesh_utils.SelectionIslands(bm.verts).get_island_count()
-
-    bm.free()
-
-    return island_count
 
 
 def all_verts_in_main_group(obj):
@@ -54,19 +35,36 @@ def all_verts_in_main_group(obj):
     return False
 
 
+def get_island_count_in_main_group(obj):
+    '''Return the count of individual islands assigned to the main group'''
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    bm.verts.ensure_lookup_table()
+    bm.edges.ensure_lookup_table()
+    bm.faces.ensure_lookup_table()
+    vs = get_verts_in_vgroup(obj, 'faceit_main')
+    if not vs:
+        return 0
+    vs_idx = [v.index for v in vs]
+    bm_verts = [v for v in bm.verts if v.index in vs_idx]
+    geo_islands = mesh_utils.GeometryIslands(bm_verts)
+    island_count = geo_islands.get_island_count()
+    bm.free()
+    return island_count
+
+
 def check_warnings_for_face_item(item):
-
-    all_warnings = []
     obj = item.get_object()
-
+    all_warnings = []
     rig = futils.get_faceit_armature()
     if not bpy.context.scene.faceit_shapes_generated:
-
-        if not futils.is_other_rigify_armature():
-            # dont warn if other rigify is used
+        if not futils.using_rigify_armature():
             if 'faceit_main' in obj.vertex_groups:
-                if all_verts_in_main_group(obj) and get_island_count(obj) > 1:
+                if get_island_count_in_main_group(obj) > 1:
                     all_warnings.append('MAIN_GROUP')
+                if any(_item.get_object().vertex_groups.get('faceit_main')
+                       for _item in bpy.context.scene.faceit_face_objects if _item.name != item.name):
+                    all_warnings.append('MULTIPLE_MAIN')
         if get_modifiers_of_type(obj, 'MIRROR'):
             all_warnings.append('MIRROR')
         for mod in obj.modifiers:
@@ -79,15 +77,6 @@ def check_warnings_for_face_item(item):
                         if not rig_target.data.pose_position == 'REST':
                             if not all([is_pb_in_rest_pose(pb) for pb in rig_target.pose.bones]):
                                 all_warnings.append('ARMATURE_POSITION')
-                            # continue
-                        # if getattr(rig_target, 'animation_data'):
-                        #     if getattr(rig_target.animation_data, 'action'):
-                        #         for fc in rig_target.animation_data.action.fcurves:
-                        #             if any(a in fc.data_path
-                        #                     for a in ['location', 'scale', 'rotation_euler', 'rotation_quaternion']):
-                        #                 all_warnings.append('ARMATURE_POSITION')
-                        #                 break
-
             if 'SURFACE_DEFORM' not in all_warnings:
                 if mod.type == 'SURFACE_DEFORM':
                     all_warnings.append('SURFACE_DEFORM')
@@ -103,13 +92,6 @@ def check_warnings_for_face_item(item):
                                 if any(kf.co.y != 0.0 for kf in fc.keyframe_points):
                                     all_warnings.append('SHAPEKEYS')
                                     break
-        #     for sk in shape_keys.key_blocks:
-        #         if sk.mute:
-        #             continue
-        #         if sk.value != 0.0:
-        #             all_warnings.append('SHAPEKEYS')
-        #             break
-
         if getattr(obj, 'animation_data'):
             if getattr(obj.animation_data, 'action'):
                 for fc in obj.animation_data.action.fcurves:
@@ -117,13 +99,10 @@ def check_warnings_for_face_item(item):
                             for a in ['location', 'scale', 'rotation_euler', 'rotation_quaternion']):
                         all_warnings.append('TRANSFORMS_ANIM')
                         break
-
     item.warnings = ''
-
     if all_warnings:
         for warn in all_warnings:
             item.warnings += warn + ','
-
     return all_warnings
 
 
@@ -140,42 +119,28 @@ class FACEIT_OT_CheckWarning(bpy.types.Operator):
 
     check_main: BoolProperty(options={'SKIP_SAVE'})
 
-    # @classmethod
-    # def poll(cls, context):
-    #     return not context.scene.faceit_shapes_generated
-
     def execute(self, context):
-
         scene = context.scene
-
         if self.item_name == 'ALL':
             items = scene.faceit_face_objects
         else:
             items = [scene.faceit_face_objects[self.item_name]]
-
         any_warning = False
-
         for item in items:
-
             all_warnings = check_warnings_for_face_item(item)
-
             if all_warnings:
                 any_warning = True
-
                 for warn in all_warnings:
                     self.report({'WARNING'}, f'[{item.name}]: {WARNINGS_OUT[warn]}')
-
         if any_warning:
             if self.set_show_warnings:
                 scene.faceit_show_warnings = True
         else:
             scene.faceit_show_warnings = False
             self.report({'INFO'}, 'No Warnings found.')
-
-        if not futils.is_other_rigify_armature():
+        if not futils.using_rigify_armature():
             if not any('faceit_main' in obj.vertex_groups for obj in futils.get_faceit_objects_list()):
                 self.report({'WARNING'}, 'Main Face Vertex Island could not be found. Please assign the Main Vertex Group!')
-
         return {'FINISHED'}
 
 
@@ -189,16 +154,12 @@ class FACEIT_OT_DisplayWarning(bpy.types.Operator):
 
     def draw(self, context):
         layout = self.layout
-
         row = layout.row()
         row.label(text='WARNINGS')
-
         row = layout.row(align=True)
         web = row.operator('faceit.open_web', text='Prepare Geometry', icon='QUESTION')
         web.link = 'https://faceit-doc.readthedocs.io/en/latest/prepare/'
-
         layout.separator()
-
         item = context.scene.faceit_face_objects[self.item_name]
         warnings = item.warnings.split(',')
 
@@ -242,13 +203,8 @@ class FACEIT_OT_DisplayWarning(bpy.types.Operator):
             self.report({'INFO'}, 'No Warnings found.')
             return {'FINISHED'}
         else:
-            # if futils.get_object_mode_from_context_mode(context.mode) != 'OBJECT' and context.object != None:
-            #     bpy.ops.object.mode_set()
-            # futils.clear_object_selection()
-            # futils.set_active_object(item.name)
             wm = context.window_manager
             return wm. invoke_popup(self)
 
     def execute(self, context):
-
         return {'FINISHED'}

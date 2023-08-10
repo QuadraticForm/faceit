@@ -1,31 +1,63 @@
 import bpy
 from mathutils import Vector
 
+
+from .control_rig_data import get_pose_bone_range_from_limit_constraint
+
+from ..core.pose_utils import copy_pose_bone_constraints, copy_pose_bone_properties
 from ..core import faceit_data as fdata
 from ..core import faceit_utils as futils
 from ..core import shape_key_utils
 
 
-def get_custom_slider_from_shape(c_rig, shape_name):
+def get_slider_from_shape(c_rig, shape_name, custom_only=True):
     ''' Get the control slider by comparing the bone name to shape name. 
     @c_rig: the control rig.
     @shape_name: the target shape.
     '''
-    arkit_ref_data = fdata.get_arkit_shape_data().keys()
-    if shape_name not in arkit_ref_data:
-        return c_rig.pose.bones.get('c_{}_slider'.format(shape_name))
+    if custom_only:
+        if shape_name in fdata.get_arkit_shape_data():
+            return None
+    return c_rig.pose.bones.get('c_{}_slider'.format(shape_name))
 
 
-def get_custom_sliders_in_crig(c_rig):
-
+def get_slider_shape_names_in_crig(c_rig, custom_only=True):
+    '''Returns the names of all custom sliders'''
     shape_key_names = []
-
     if c_rig:
-
         crig_targets = c_rig.faceit_crig_targets
         if not crig_targets:
             return shape_key_names
-        return [n.name for n in crig_targets if get_custom_slider_from_shape(c_rig, n.name)]
+        return [n.name for n in crig_targets if get_slider_from_shape(c_rig, n.name, custom_only=custom_only)]
+
+
+def get_sliders_in_crig(c_rig, custom_only=True):
+    '''Returns the names of all custom sliders'''
+    sliders = []
+    for shape_item in c_rig.faceit_crig_targets:
+        slider = get_slider_from_shape(c_rig, shape_item.name, custom_only=custom_only)
+        if slider:
+            sliders.append(slider)
+    return sliders
+
+
+def get_slider_range_from_limit_constraint(constraint):
+    '''Returns FULL or POSITIVE range from limit constraint'''
+    if constraint.use_min_y < 0:
+        return 'FULL'
+    else:
+        return 'POS'
+
+
+def get_properties_for_sliders(c_rig, custom_only=False):
+    '''Populate the slider_name, slider_range properties in the crig_targets collection'''
+    for shape_item in c_rig.faceit_crig_targets:
+        slider = get_slider_from_shape(c_rig, shape_item.name, custom_only=custom_only)
+        if not slider:
+            continue
+        shape_item.slider_name = slider.name
+        _max, min = get_pose_bone_range_from_limit_constraint(slider)
+        shape_item.slider_range = 'FULL' if min[1] < 0 else 'POS'
 
 
 def get_custom_sliders_in_crig_targets_enum(self, context):
@@ -39,14 +71,11 @@ def get_custom_sliders_in_crig_targets_enum(self, context):
     # faceit_objects = futils.get_faceit_objects_list()
     c_rig = futils.get_faceit_control_armature()
     if c_rig:
-
-        for i, name in enumerate(get_custom_sliders_in_crig(c_rig)):
-
+        for i, name in enumerate(get_slider_shape_names_in_crig(c_rig, custom_only=self.custom_only)):
             shapes.append((name, name, name, i))
     else:
         print('no shapes found --> add None')
         shapes.append(("None", "None", "None"))
-
     return shapes
 
 
@@ -57,7 +86,6 @@ def get_custom_sliders_from_faceit_objects_enum(self, context):
     shapes = []
 
     if context is None:
-        print('get_shape_keys_from_main_object --> Context is None')
         return shapes
     faceit_objects = futils.get_faceit_objects_list()
 
@@ -82,29 +110,84 @@ def get_custom_sliders_from_faceit_objects_enum(self, context):
     return shapes
 
 
-def generate_extra_sliders(context, shape_name, slider_range, rig_obj, max_rows=10, overwrite=False):
-    '''Create standart shape key sliders in the control rig armature
-    @shape: [string] name of new slider.
-    @slider_range: [string] value in (pos_range, full range)
-    @rig_obj: the obj id of the control rig armature
-    @max_rows: When multiple shapes are present, create a new column for every [...] shapes
-    '''
+def generate_extra_2dslider(slider_name, rig_obj):
+    '''Create a 2d slider in the control rig armature'''
     mirror_settings = rig_obj.data.use_mirror_x
     rig_obj.data.use_mirror_x = False
-
     layer_state = rig_obj.data.layers[:]
-    # rig_obj.data.layers[:] = True
+    for i, _ in enumerate(rig_obj.data.layers):
+        rig_obj.data.layers[i] = True
+    bpy.ops.object.mode_set(mode='EDIT')
+    ref_slider_parent_bone = rig_obj.data.edit_bones.get('c_slider2d_ref_parent')
+    # init_pos = ref_slider_parent_bone.head.copy()
+    # ref_length = ref_slider_parent_bone.length
+    ref_bones = ['c_slider2d_ref', 'c_slider2d_ref_parent', 'c_slider2d_ref_txt']
+    new_bone_names = [f'c_{slider_name}_slider2d', f'c_{slider_name}_slider2d_parent', f'c_{slider_name}_slider2d_txt']
+    ref_bone_slider_dict = dict(zip(ref_bones, new_bone_names))
 
+    def duplicate_edit_bone(bone, new_name, bone_layers=None):
+        '''Duplicate an edit bone'''
+        new_bone = rig_obj.data.edit_bones.new(new_name)
+        new_bone.head = bone.head
+        new_bone.tail = bone.tail
+        new_bone.matrix = bone.matrix
+        new_bone.parent = bone.parent
+        if bone_layers:
+            new_bone.layers = bone_layers
+        return new_bone
+
+    edit_bones = rig_obj.data.edit_bones
+    layers = [False] * 32
+    layers[2] = True
+    new_sliders = []
+    for ref_slider_name, new_slider_name in ref_bone_slider_dict.items():
+        ref_slider = edit_bones.get(ref_slider_name)
+        if new_slider_name in edit_bones:
+            edit_bones.remove(edit_bones.get(new_slider_name))
+        new_sliders.append(duplicate_edit_bone(ref_slider, new_slider_name, bone_layers=layers))
+        
+    bpy.ops.object.mode_set(mode='OBJECT')
+    rig_obj.data.layers = layer_state[:]
+    rig_obj.data.layers[2] = True
+    rig_obj.data.use_mirror_x = mirror_settings
+
+    for ref_slider_name, new_slider_name in ref_bone_slider_dict.items():
+        slider_ref = rig_obj.pose.bones.get(ref_slider_name)
+        slider = rig_obj.pose.bones.get(new_slider_name)
+        copy_pose_bone_constraints(slider_ref, slider)
+        copy_pose_bone_properties(slider_ref, slider)
+
+    bone = rig_obj.pose.bones.get(f'c_{slider_name}_slider2d_txt')
+    if bone:
+        txt_obj = generate_custom_curve_text(slider_name)
+
+        bone.custom_shape = txt_obj
+    return f'c_{slider_name}_slider2d'
+
+
+def generate_extra_sliders(context, shape_name, slider_range, rig_obj, max_rows=20, overwrite=False, in_2d_layout=False, n=0) -> str:
+    """Create standart shape key sliders in the control rig armature
+    Args:
+        @shape: [string] name of new slider.
+        @slider_range: [string] value in (pos_range, full range)
+        @rig_obj: the obj id of the control rig armature
+        @max_rows: When multiple shapes are present, create a new column for every [...] shapes
+    Returns:
+        the name of the new slider
+    """
+    mirror_settings = rig_obj.data.use_mirror_x
+    rig_obj.data.use_mirror_x = False
+    layer_state = rig_obj.data.layers[:]
     for i in range(len(rig_obj.data.layers)):
         rig_obj.data.layers[i] = True
-
     slider_existing_already = get_all_slider_bones(rig_obj, only_controllers=True)
-
     bpy.ops.object.mode_set(mode='EDIT')
-
-    ##### References #####
     ref_slider_parent_bone = rig_obj.data.edit_bones.get('c_slider_small_ref_parent')
-    init_pos = ref_slider_parent_bone.head.copy()
+    if in_2d_layout:
+        ref = rig_obj.data.edit_bones.get('c_slider2d_ref_parent')
+        init_pos = ref.head.copy()
+    else:
+        init_pos = ref_slider_parent_bone.head.copy()
     ref_length = ref_slider_parent_bone.length
 
     def select_ref_bones(slider_range):
@@ -133,10 +216,7 @@ def generate_extra_sliders(context, shape_name, slider_range, rig_obj, max_rows=
         slider_bones = [b_parent, b_txt, b_slider]
 
         if any([b is not None for b in slider_bones]) and overwrite:
-            # if b_slider.location == pos:
-            #     pos.z -= ref_length / 2
             pos = b_slider.head.copy()
-
             for b in slider_bones:
                 edit_bones.remove(b)
             slider_bones = None
@@ -145,12 +225,9 @@ def generate_extra_sliders(context, shape_name, slider_range, rig_obj, max_rows=
         if not slider_bones or all([b is None for b in slider_bones]):
             # Create new slider bones:
             select_ref_bones(slider_range)
-
             bpy.ops.object.mode_set(mode='OBJECT')
             bpy.ops.object.mode_set(mode='EDIT')
-
             bpy.ops.armature.duplicate()
-
             slider_bones = context.selected_bones
 
         elif any([b is not None for b in slider_bones]) and not overwrite:
@@ -182,40 +259,40 @@ def generate_extra_sliders(context, shape_name, slider_range, rig_obj, max_rows=
             b.layers[2] = True
             b.layers[31] = False
 
-        return True
+        return f'c_{shape_name}_slider'
 
     ##### Create #####
     pos = init_pos.copy()
-
     total_slider_count = 0
-
+    # if in_2d_layout:
+    #     slider_pos_x = total_slider_count // max_rows * ref_length * 2
+    #     slider_pos_z = total_slider_count % max_rows * ref_length / 2
+    #     pos = Vector((
+    #         pos.x + slider_pos_x,
+    #         pos.y,
+    #         init_pos.z + slider_pos_z)
+    #     )
     if slider_existing_already:
-
-        total_slider_count = len(slider_existing_already)
-
+        if in_2d_layout:
+            total_slider_count = n
+        else:
+            total_slider_count = len(slider_existing_already)
         slider_pos_x = total_slider_count // max_rows * ref_length * 2
         slider_pos_z = total_slider_count % max_rows * ref_length / 2
-
         pos = Vector((
             pos.x + slider_pos_x,
             pos.y,
             init_pos.z + slider_pos_z)
         )
-    # for i, shape_name in enumerate(shape_list):
-
     result = new_bone_pair_at_location(shape_name, pos, overwrite)
-
     if result is False:
         bpy.ops.object.mode_set(mode='OBJECT')
-        # continue
         return
 
     total_slider_count += 1
-
     if (total_slider_count % max_rows) == 0:
         # Vertical gap
         pos = Vector((pos.x + ref_length * 2, pos.y, init_pos.z))
-
     # Horizontal gap
     pos.z += ref_length / 2
 
@@ -231,13 +308,12 @@ def generate_extra_sliders(context, shape_name, slider_range, rig_obj, max_rows=
     rig_obj.data.layers[2] = True
     rig_obj.data.use_mirror_x = mirror_settings
 
-    # for shape_name in shape_list:
-
-    bone = rig_obj.pose.bones.get('c_{}_slider_txt'.format(shape_name))
+    bone = rig_obj.pose.bones.get(f'c_{shape_name}_slider_txt')
     if bone:
         txt_obj = generate_custom_curve_text(shape_name)
 
         bone.custom_shape = txt_obj
+    return f'c_{shape_name}_slider'
 
 
 def get_all_slider_bones(rig, filter='', only_controllers=False):

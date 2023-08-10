@@ -300,9 +300,9 @@ class FACEIT_OT_ResetRetargetShapes(bpy.types.Operator):
 class FACEIT_OT_ImportRetargetMap(bpy.types.Operator):
     '''Import a Retargeting Map from file. JSON file containing source and target shapes'''
     bl_idname = "faceit.import_retargeting_map"
-    bl_label = 'Import'
+    bl_label = 'Load Capture Profile'
 
-    filepath: bpy.props.StringProperty(subtype="FILE_PATH", default='retargeting_preset.json')
+    filepath: bpy.props.StringProperty(subtype="FILE_PATH", default='capture_profile.json')
     filter_glob: StringProperty(
         default='*.json;',
         options={'HIDDEN'},
@@ -315,7 +315,16 @@ class FACEIT_OT_ImportRetargetMap(bpy.types.Operator):
         ),
         default='ARKIT'
     )
-
+    load_amplify_values: BoolProperty(
+        name='Load Amplify Values',
+        description='Load the amplify values saved in this profile',
+        default=True,
+    )
+    load_regions: BoolProperty(
+        name='Load Regions',
+        description='Load the regions saved in this profile',
+        default=True,
+    )
     # @classmethod
     # def poll(cls, context):
     #     obj = futils.get_main_faceit_object()
@@ -323,9 +332,18 @@ class FACEIT_OT_ImportRetargetMap(bpy.types.Operator):
     #         return sk_utils.has_shape_keys(obj)
 
     def invoke(self, context, event):
-        self.filepath = 'retargeting_preset.json'
+        self.filepath = 'capture_profile.json'
         context.window_manager.fileselect_add(self)
         return {'RUNNING_MODAL'}
+
+    def draw(self, context):
+        layout = self.layout
+        row = layout.row()
+        row.label(text='Import Settings')
+        row = layout.row()
+        row.prop(self, 'load_amplify_values')
+        row = layout.row()
+        row.prop(self, 'load_regions')
 
     def execute(self, context):
         scene = bpy.context.scene
@@ -333,6 +351,10 @@ class FACEIT_OT_ImportRetargetMap(bpy.types.Operator):
         _filename, extension = os.path.splitext(self.filepath)
         if extension != '.json':
             self.report({'ERROR'}, 'You need to provide a file of type .json')
+            return {'CANCELLED'}
+
+        if not os.path.isfile(self.filepath):
+            self.report({'ERROR'}, f"The specified filepath does not exist: {os.path.realpath(self.filepath)}")
             return {'CANCELLED'}
 
         with open(self.filepath, 'r') as f:
@@ -350,7 +372,7 @@ class FACEIT_OT_ImportRetargetMap(bpy.types.Operator):
                     retarget_list = scene.faceit_a2f_retarget_shapes
 
                 bpy.ops.faceit.init_retargeting('EXEC_DEFAULT', expression_sets=self.expression_sets, empty=True)
-
+                default_region_dict = fdata.get_regions_dict()
                 for arkit_name, target_dict in data.items():
 
                     target_shapes_list = target_dict['target_shapes']
@@ -360,7 +382,14 @@ class FACEIT_OT_ImportRetargetMap(bpy.types.Operator):
                     except KeyError:
                         continue
                     target_shapes = shape_item.target_shapes
-                    shape_item.amplify = target_dict.get('amplify', 1.0)
+                    if self.load_amplify_values:
+                        shape_item.amplify = target_dict.get('amplify', 1.0)
+                    else:
+                        shape_item.amplify = 1.0
+                    if self.load_regions:
+                        shape_item.region = target_dict.get('region', default_region_dict.get(shape_item.name, 'OTHER'))
+                    else:
+                        shape_item.region = default_region_dict.get(shape_item.name, 'OTHER')
                     # clear
                     target_shapes.clear()
                     for target_shape in target_shapes_list:
@@ -388,7 +417,7 @@ class FACEIT_OT_ImportRetargetMap(bpy.types.Operator):
 class FACEIT_OT_ExportRetargetMap(bpy.types.Operator):
     '''Export mapping to JSON file, containing source and target shapes'''
     bl_idname = "faceit.export_retargeting_map"
-    bl_label = 'Export'
+    bl_label = 'Save Capture Profile'
     bl_options = {'UNDO'}
 
     filepath: StringProperty(
@@ -408,6 +437,16 @@ class FACEIT_OT_ExportRetargetMap(bpy.types.Operator):
         ),
         default='ARKIT'
     )
+    save_regions: BoolProperty(
+        name='Save Regions',
+        description='Save the regions in this profile',
+        default=True
+    )
+    save_amplify_values: BoolProperty(
+        name='Save Amplify Values',
+        description='Save the amplify values in this profile',
+        default=True
+    )
 
     @classmethod
     def poll(cls, context):
@@ -417,30 +456,25 @@ class FACEIT_OT_ExportRetargetMap(bpy.types.Operator):
                 return True
 
     def invoke(self, context, event):
-        self.filepath = 'retargeting_preset.json'
+        self.filepath = 'capture_profile.json'
         context.window_manager.fileselect_add(self)
         return {'RUNNING_MODAL'}
 
     def execute(self, context):
-        # scene = bpy.context.scene
 
         retarget_list = get_active_retarget_list()
-        # if self.expression_sets == 'ARKIT':
-        #     retarget_list = scene.faceit_arkit_retarget_shapes
-        # elif self.expression_sets == 'A2F':
-        #     retarget_list = scene.faceit_a2f_retarget_shapes
-        # retarget_list = scene.faceit_arkit_retarget_shapes
-
         data = {}
         shape_dict = get_target_shapes_dict(retarget_list, force_empty_strings=True)
-
         for arkit_name, target_shape_list in shape_dict.items():
             shape_item = retarget_list[arkit_name]
-            data[arkit_name] = {
-                'amplify': getattr(shape_item, 'amplify', 1.0),
+            _dict = {
                 'target_shapes': target_shape_list,
             }
-
+            if self.save_amplify_values:
+                _dict['amplify'] = getattr(shape_item, 'amplify', 1.0)
+            if self.save_regions:
+                _dict['region'] = getattr(shape_item, 'region', 'OTHER')
+            data[arkit_name] = _dict
         if not data:
             self.report({'ERROR'}, 'Export Failed. Could not find retarget data')
             return {'CANCELLED'}
@@ -453,6 +487,19 @@ class FACEIT_OT_ExportRetargetMap(bpy.types.Operator):
 
         self.report({'INFO'}, 'Exported to {}'.format(self.filepath))
 
+        return {'FINISHED'}
+
+
+class FACEIT_OT_SetDefaultAmplifyValues(bpy.types.Operator):
+    '''Set default amplify values for all items'''
+    bl_idname = 'faceit.set_default_amplify_values'
+    bl_label = 'Set Default Amplify Values'
+    bl_options = {'UNDO', 'INTERNAL'}
+
+    def execute(self, context):
+        retarget_list = get_active_retarget_list()
+        for item in retarget_list:
+            item.amplify = 1.0
         return {'FINISHED'}
 
 
@@ -476,6 +523,11 @@ class FACEIT_OT_SetActiveShapeKeyIndex(bpy.types.Operator):
         description='try to get the arkit target shapes from the arkit_shapes_list',
         default=False
     )
+    amplify: FloatProperty(
+        name='Amplify',
+        default=1.0,
+        options={'SKIP_SAVE'}
+    )
 
     @ classmethod
     def poll(cls, context):
@@ -492,7 +544,8 @@ class FACEIT_OT_SetActiveShapeKeyIndex(bpy.types.Operator):
         all_expression_names = get_all_set_target_shapes(scene.faceit_arkit_retarget_shapes)
         all_expression_names.extend(get_all_set_target_shapes(scene.faceit_a2f_retarget_shapes))
         all_expression_names.extend([ex.name for ex in scene.faceit_expression_list])
-
+        # Get the jawOpen shape for mouthClose evaluation
+        jawOpen_item = None
         if self.get_active_target_shapes:
 
             if scene.faceit_display_retarget_list == 'ARKIT':
@@ -503,14 +556,14 @@ class FACEIT_OT_SetActiveShapeKeyIndex(bpy.types.Operator):
                 retarget_list_index = scene.faceit_a2f_retarget_shapes_index
             if self.shape_name:
                 active_shape_item = retarget_list.get(self.shape_name)
+                if self.shape_name == 'mouthClose':
+                    jawOpen_item = retarget_list.get('jawOpen')
             else:
                 active_shape_item = retarget_list[retarget_list_index]
 
             target_shapes = [item.name for item in active_shape_item.target_shapes]
         else:
             target_shapes = [self.shape_name]
-
-        lock_active = scene.faceit_shape_key_lock
 
         if not target_shapes:
             # self.report({'ERROR'}, 'Did not find the Shape Key(s) {}'.format(target_shapes))
@@ -524,10 +577,9 @@ class FACEIT_OT_SetActiveShapeKeyIndex(bpy.types.Operator):
             # Set only one shape active per object. (First in target shapes)
             _set_active = False
 
-            if lock_active:
-                for sk in shapekeys:
-                    if sk.name in all_expression_names:
-                        sk.value = 0
+            for sk in shapekeys:
+                if sk.name in all_expression_names:
+                    sk.value = 0
 
             for target_shape_name in target_shapes:
 
@@ -539,12 +591,12 @@ class FACEIT_OT_SetActiveShapeKeyIndex(bpy.types.Operator):
                         obj.active_shape_key_index = found_index
                         _set_active = True
 
-                    if lock_active:
-                        if target_shape_name == "mouthClose":
-                            jawOpenSk = shapekeys.get("jawOpen")
+                    if jawOpen_item is not None:
+                        for _ts in jawOpen_item.target_shapes:
+                            jawOpenSk = shapekeys.get(_ts.name)
                             if jawOpenSk:
-                                jawOpenSk.value = 1
-                        shapekeys[found_index].value = 1
+                                jawOpenSk.value = jawOpen_item.amplify
+                    shapekeys[found_index].value = self.amplify
 
         scene.tool_settings.use_keyframe_insert_auto = store_auto_kf
 

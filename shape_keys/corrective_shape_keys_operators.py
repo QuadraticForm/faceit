@@ -57,48 +57,63 @@ class FACEIT_OT_AddCorrectiveShapeKeyToExpression(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
-        obj = context.object
-        if not obj:
-            self.report({'ERROR'}, 'Select an Object first!')
-            return {'CANCELLED'}
-        if not get_faceit_armature_modifier(obj, force_original=False):
-            self.report({'ERROR'}, 'The selected Object is not bound to the FaceitRig!')
+        objects = context.selected_objects
+        if objects:
+            for obj in objects:
+                if obj.name not in scene.faceit_face_objects:
+                    obj.select_set(False)
+                    objects.remove(obj)
+        if not objects:
+            self.report({'ERROR'}, 'Select at least one registered Object!')
             return {'CANCELLED'}
         expression_list = scene.faceit_expression_list
-        if not self.expression:
-            return {'CANCELLED'}
         exp = expression_list.get(self.expression)
-        if not exp:
-            self.report({'WARNING'}, 'Expression not found')
-            return {'CANCELLED'}
         exp_index = expression_list.find(exp.name)
         sk_name = 'faceit_cc_' + exp.name
-        if context.mode == 'SCULPT':
-            bpy.ops.object.mode_set()
-            if obj.active_shape_key.name == sk_name:
-                return {'FINISHED'}
         frame = exp.frame
         scene.frame_current = frame
         scene.faceit_expression_list_index = exp_index
         mirror_x = (exp.mirror_name == '')
-        obj.data.use_mirror_x = mirror_x
-        obj.show_only_shape_key = False
-        bpy.ops.object.mode_set(mode='SCULPT')
-        # Add Shape Key
-        has_sk = has_shape_keys(obj)
-        if not has_sk:
-            basis_shape = obj.shape_key_add(name='Basis')
-            basis_shape.interpolation = 'KEY_LINEAR'
-            sk = obj.shape_key_add(name=sk_name, from_mix=False)
-        else:
-            obj.data.shape_keys.reference_key.name = 'Basis'
-            sk = obj.data.shape_keys.key_blocks.get(sk_name)
-            if not sk:
+        for obj in objects:
+            if obj.mode in ('SCULPT', 'EDIT'):
+                if obj.active_shape_key:
+                    if obj.active_shape_key.name == sk_name:
+                        bpy.ops.object.mode_set()
+                        self.report({'INFO'}, 'Exit editing corrective Shape Key.')
+                        return {'FINISHED'}
+            obj.data.use_mirror_x = mirror_x
+            obj.use_shape_key_edit_mode = True
+            obj.show_only_shape_key = False
+            # Add Shape Key
+            has_sk = has_shape_keys(obj)
+            sk_added = False
+            if not has_sk:
+                basis_shape = obj.shape_key_add(name='Basis')
+                basis_shape.interpolation = 'KEY_LINEAR'
                 sk = obj.shape_key_add(name=sk_name, from_mix=False)
+                sk_added = True
+            else:
+                obj.data.shape_keys.reference_key.name = 'Basis'
+                sk = obj.data.shape_keys.key_blocks.get(sk_name)
+                if not sk:
+                    sk = obj.shape_key_add(name=sk_name, from_mix=False)
+                    sk_added = True
+            obj.active_shape_key_index = obj.data.shape_keys.key_blocks.find(sk.name)
+            corrective_shape_keys_utils.assign_corrective_sk_action(obj)
         exp.corr_shape_key = True
-        corrective_shape_keys_utils.assign_corrective_sk_action(obj)
         corrective_shape_keys_utils.keyframe_corrective_sk_action(exp)
-        obj.active_shape_key_index = obj.data.shape_keys.key_blocks.find(sk.name)
+        if scene.faceit_corrective_shape_keys_edit_mode == 'SCULPT':
+            bpy.ops.object.mode_set(mode='SCULPT')
+        else:
+            bpy.ops.object.mode_set(mode='EDIT')
+        if sk_added:
+            self.report(
+                {'INFO'},
+                f'Added new corrective Shape Key "{sk_name}" to object {", ".join([obj.name for obj in objects])}.')
+        else:
+            self.report(
+                {'INFO'},
+                f'Edit corrective Shape Key "{sk_name}" on object {", ".join([obj.name for obj in objects])}.')
 
         return {'FINISHED'}
 
@@ -170,7 +185,7 @@ class FACEIT_OT_RemoveCorrectiveShapeKey(bpy.types.Operator):
             operate_objects.append(obj)
             objects_txt = f'object {obj.name}'
 
-        if context.mode == 'SCULPT':
+        if context.mode != 'OBJECT':
             bpy.ops.object.mode_set(mode='OBJECT')
 
         expression_list = scene.faceit_expression_list

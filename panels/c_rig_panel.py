@@ -1,5 +1,9 @@
 import bpy
 
+from ..ctrl_rig.control_rig_data import CNTRL_RIG_VERSION
+
+from ..core.faceit_data import get_arkit_shape_data
+
 from .draw_utils import draw_text_block
 
 from ..core.faceit_utils import get_object, get_faceit_control_armature
@@ -56,23 +60,23 @@ class FACEIT_PT_ControlRig(FACEIT_PT_BaseCtrl, bpy.types.Panel):
         row.operator('faceit.generate_control_rig', icon='CON_ARMATURE')
         ctrl_rig = context.scene.faceit_control_armature
         if ctrl_rig:
+            if ctrl_rig.get('ctrl_rig_version', 1.0) != CNTRL_RIG_VERSION:
+                # TODO: Make sure that this operator is not shown when
+                # the control rig is linked form another scene
+                col.separator()
+                box = col.box()
+                row = box.row()
+                row.label(text='Control Rig Update Available!')
+                row = box.row()
+                row.operator('faceit.update_control_rig', icon='FILE_REFRESH')
+
             row = col.row(align=True)
             row.label(text='Drivers')
 
             row = col.row(align=True)
             row.operator('faceit.setup_control_drivers', text='Connect', icon='LINKED')
             # text = "Disconnect" if scene.faceit_control_armature else "Clear Drivers"
-            row.operator('faceit.remove_control_drivers', text="Diconnect", icon='UNLINKED')
-
-        if scene.faceit_face_objects:
-            row = col.row()
-            row.label(text="Landmarks")
-            if scene.faceit_pin_panels.FACEIT_PT_Landmarks:
-                icon = 'PINNED'
-            else:
-                icon = 'UNPINNED'
-            row = col.row()
-            row.prop(scene, "faceit_show_landmarks_ctrl_rig", text="Show Landmark Panel", icon=icon)
+            row.operator('faceit.remove_control_drivers', text="Disconnect", icon='UNLINKED')
 
 
 class FACEIT_PT_ControlRigAnimation(FACEIT_PT_BaseCtrl, bpy.types.Panel):
@@ -138,17 +142,51 @@ class FACEIT_PT_ControlRigControllers(FACEIT_PT_BaseSub, bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        scene = context.scene
         col = layout.column()
-
         row = col.row(align=True)
         row.operator('faceit.setup_custom_controller', icon='BONE_DATA')
         row.operator('faceit.remove_custom_controller', icon='TRASH')
+        row = col.row(align=True)
+        c_rig = context.scene.faceit_control_armature
+        row.prop(c_rig, 'faceit_crig_rows')
+        row.operator('faceit.rearrange_custom_controllers', text='Rearrange', icon='SORTSIZE')
+        row = col.row(align=True)
+        row.operator('faceit.save_control_rig_template', icon='FILE_TICK')
+        row.operator('faceit.load_control_rig_template', icon='FILE_FOLDER')
 
         row = col.row()
-        row.operator('faceit.update_control_rig', icon='FILE_REFRESH')
-        row = col.row()
         row.operator('faceit.control_rig_set_slider_ranges', text='Change Slider Ranges', icon='CON_DISTLIMIT')
+        box = col.box()
+        col = box.column(align=True)
+        col.alignment = 'RIGHT'
+        row = col.row()
+        row.label(text='Slider Colors (Bone Groups)')
+        bone_groups = c_rig.pose.bone_groups
+        # row = box.row(align=False)
+        left_grp = bone_groups.get('Left')
+        row = col.row(align=True)
+        sub = row.split(align=True)
+        sub.alignment = 'RIGHT'
+        sub.label(text="Left")
+        sub.prop(left_grp.colors, "normal", text="")
+        sub.prop(left_grp.colors, "select", text="")
+        sub.prop(left_grp.colors, "active", text="")
+        right_grp = bone_groups.get('Right')
+        row = col.row(align=True)
+        sub = row.split(align=True)
+        sub.alignment = 'RIGHT'
+        sub.label(text="Right")
+        sub.prop(right_grp.colors, "normal", text="")
+        sub.prop(right_grp.colors, "select", text="")
+        sub.prop(right_grp.colors, "active", text="")
+        special_grp = bone_groups.get('Special')
+        row = col.row(align=True)
+        sub = row.split(align=True)
+        sub.alignment = 'RIGHT'
+        sub.label(text="Special")
+        sub.prop(special_grp.colors, "normal", text="")
+        sub.prop(special_grp.colors, "select", text="")
+        sub.prop(special_grp.colors, "active", text="")
 
 
 class FACEIT_PT_ControlRigExperimental(FACEIT_PT_BaseSub, bpy.types.Panel):
@@ -207,6 +245,25 @@ class FACEIT_PT_ControlRigTargetShapes(FACEIT_PT_BaseCtrl, bpy.types.Panel):
             row = col_retarget.row(align=True)
             row.template_list('FACEIT_UL_RetargetControlRigList', '', c_rig,
                               'faceit_crig_targets', c_rig, 'faceit_crig_targets_index')
+
+            col_ul = row.column(align=False)
+            row = col_ul.row(align=True)
+            row.operator('faceit.setup_custom_controller', text='', icon='ADD')
+            row = col_ul.row(align=True)
+            row.operator_context = 'EXEC_DEFAULT'
+            active_target = c_rig.faceit_crig_targets[c_rig.faceit_crig_targets_index]
+            is_valid = active_target.name not in get_arkit_shape_data()
+            row.enabled = is_valid
+            op = row.operator('faceit.remove_custom_controller', text='', icon='REMOVE')
+            op.custom_only = False
+            if is_valid:
+                op.custom_slider = active_target.name
+
+            col_ul.separator()
+            row = col_ul.row(align=True)
+            col_ul.operator('faceit.move_target_shape_item', icon='TRIA_UP', text='').direction = 'UP'
+            row = col_ul.row(align=False)
+            col_ul.operator('faceit.move_target_shape_item', icon='TRIA_DOWN', text='').direction = 'DOWN'
 
 
 class FACEIT_PT_ControlRigTargetObjects(FACEIT_PT_BaseCtrl, bpy.types.Panel):

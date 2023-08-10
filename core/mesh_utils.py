@@ -3,7 +3,39 @@ from math import acos, pi
 import bmesh
 import bpy
 
+
+from ..core.faceit_utils import get_faceit_objects_list
 from .vgroup_utils import get_verts_in_vgroup
+
+
+def delete_vertices_outside(bm, vids):
+    '''Deletes all vertices that are not in the vids'''
+    verts_delete = [v for v in bm.verts if v.index not in vids]
+    if verts_delete:
+        bmesh.ops.delete(bm, geom=verts_delete, context='VERTS')
+
+
+# def create_bmesh_from_multiple_objects(objects, vertex_group_filter=''):
+#     dg = bpy.context.evaluated_depsgraph_get()
+#     bm = bmesh.new()
+#     for obj in objects:
+#         vgroup = obj.vertex_groups.get(vertex_group_filter)
+#         if not vgroup:
+#             continue
+#         obj = obj.evaluated_get(dg)
+#         vg_idx = vgroup.index
+#         vids = [v.index for v in obj.data.vertices if vg_idx in [vg.group for vg in v.groups]]
+#         bm_temp = bmesh.new()
+#         bm_temp.from_mesh(obj.data)
+#         delete_vertices_outside(bm_temp, vids)
+#         me = bpy.data.meshes.new('temp_mesh')
+#         bm_temp.to_mesh(me)
+#         bm_temp.free()
+#         for v in me.vertices:
+#             v.co = obj.matrix_world @ v.co
+#         bm.from_mesh(me)
+#         bpy.data.meshes.remove(me)
+#     return bm
 
 
 def get_max_dim_in_direction(obj, direction, vertex_group_name=None):
@@ -26,6 +58,53 @@ def get_max_dim_in_direction(obj, direction, vertex_group_name=None):
             far_distance = temp
             far_point = point
     return far_point
+
+
+def select_vertices_bmesh(vids, bm, deselect_others=False):
+    '''select vertices using the bmesh module'''
+    for v in bm.verts:
+        if v.index in vids:
+            v.select = True
+        elif deselect_others:
+            v.select = False
+    bm.select_flush(True)
+    bm.select_flush(False)
+
+
+def select_vertices(obj, vs=None, deselect_others=False) -> None:
+    '''
+    select vertices using the bmesh module
+    @obj: the object that holds mesh data
+    @vs : vert subset to select
+    @deselect_others : deselect all other vertices
+    '''
+    if vs:
+        vids = [v.index for v in vs]
+    else:
+        vids = [v.index for v in obj.data.vertices]
+    if obj.mode == 'EDIT':
+        bm = bmesh.from_edit_mesh(obj.data)
+    else:
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+    select_vertices_bmesh(vids, bm, deselect_others)
+    if obj.mode == 'EDIT':
+        bmesh.update_edit_mesh(obj.data)
+    else:
+        bm.to_mesh(obj.data)
+        bm.free()
+
+
+def get_object_center(obj):
+    '''Find the center of a mesh object using the outside cage.'''
+    vcos = [obj.matrix_world @ v.co for v in obj.data.vertices]
+
+    def findCenter(vcos):
+        return (max(vcos) + min(vcos)) / 2
+
+    x, y, z = [[v[i] for v in vcos] for i in range(3)]
+    center = [findCenter(axis) for axis in [x, y, z]]
+    return center
 
 
 def is_inside_dot(target_pt_global, mesh_obj, tolerance=0.05):
@@ -56,32 +135,29 @@ def is_inside_dot(target_pt_global, mesh_obj, tolerance=0.05):
     return inside
 
 
-class SelectionIslands:
-    '''
+class GeometryIslands:
+    """
     Traces the graph of edges and verts to find the islands
     @verts : bmesh vertices
-    @selection_islands : the islands of adjacent selected vertices
-    @non_selected_islands : the islands of adjacent non selected vertices
-    '''
+    @islands : list of connected vertex islands, i.e. surfaces
+    """
 
     verts = []
-    selected_islands = []
-    non_selected_islands = []
+    islands = []
     # wether selected or non selected islands should be searched
 
     def __init__(self, bmesh_verts):
         self.verts = bmesh_verts
-        self.sort_selection_start(self.verts)
+        self.islands = self.make_islands(self.verts)
 
-    def make_vert_paths(self, verts, search_selected):
+    def make_vert_paths(self, verts):
         # Init a set for each vertex
         result = {v: set() for v in verts}
         # Loop over vertices to store connected other vertices
         for v in verts:
             for e in v.link_edges:
                 other = e.other_vert(v)
-                if other.select == search_selected:
-                    result[v].add(other)
+                result[v].add(other)
         return result
 
     def make_island(self, starting_vert, paths):
@@ -89,7 +165,6 @@ class SelectionIslands:
         island = [starting_vert]
         # Initialize the current vertices to explore
         current = [starting_vert]
-
         follow = True
         while follow:
             # Get connected vertices that are still in the paths
@@ -105,11 +180,10 @@ class SelectionIslands:
                     paths.pop(key)
                 # Get the new links as new inputs
                 current = set([vert for sub in next for vert in sub])
-
         return island
 
-    def make_islands(self, bm_verts, search_selected):
-        paths = self.make_vert_paths(bm_verts, search_selected)
+    def make_islands(self, bm_verts):
+        paths = self.make_vert_paths(bm_verts)
         result = []
         found = True
         while found:
@@ -122,68 +196,63 @@ class SelectionIslands:
                 found = False
         return result
 
-    def sort_selection_start(self, bm_verts):
-        non_selected_verts = []
-        selected_verts = []
-        for v in bm_verts:
-            if v.select:
-                selected_verts.append(v)
-            else:
-                non_selected_verts.append(v)
-        self.selected_islands = self.make_islands(selected_verts, search_selected=True)
-        self.non_selected_islands = self.make_islands(non_selected_verts, search_selected=False)
-
-    def get_selected_islands(self):
-        return self.selected_islands
-
-    def get_non_selected_islands(self):
-        return self.non_selected_islands
+    def get_islands(self):
+        return self.islands
 
     def get_island_count(self):
-        return len(self.non_selected_islands + self.selected_islands)
+        return len(self.islands)
+
+    def get_island_by_vertex_index(self, index):
+        for island in self.islands:
+            if any(v.index == index for v in island):
+                return island
+        # return next((x for x in self.islands if any(index == v.index for v in x)), None)
+
+    def get_selected_islands(self):
+        for island in self.islands:
+            if any(v.select for v in island):
+                yield island
+
+    def select_linked(self):
+        ''' Select all linked vertices for surfaces that have a partial selection'''
+        for island in self.get_selected_islands():
+            for v in island:
+                v.select = True
 
 
-def select_vertices(obj, vs=[], flush_selection=False):
+class SelectionIslands(GeometryIslands):
     '''
-    select vertices in a mesh (OBJECT mode required)
-    @obj: the object that holds mesh data
-    @vs : vert subset to select
+    Traces the graph of edges and verts to find the islands
+    @verts : bmesh vertices
+    @selection_islands : the islands of adjacent selected vertices
+    @non_selected_islands : the islands of adjacent non selected vertices
     '''
-    verts = vs or obj.data.vertices
-    for v in verts:
-        v.select = True
-    if flush_selection:
-        bpy.ops.object.mode_set(mode='EDIT')
-        me = obj.data
-        bm = bmesh.from_edit_mesh(me)
-        bm.select_mode = {'VERT', 'EDGE', 'FACE'}
-        bm.select_flush_mode()
-        bpy.ops.object.mode_set()
 
+    def __init__(self, bmesh_verts, selection_state):
+        self.verts = [v for v in bmesh_verts if v.select == selection_state]
+        self.islands = self.make_islands(self.verts, selection_state)
 
-def get_object_center(obj):
-    vcos = [obj.matrix_world @ v.co for v in obj.data.vertices]
-    def findCenter(l): return (max(l) + min(l)) / 2
+    def make_vert_paths(self, verts, selection_state):
+        # Init a set for each vertex
+        result = {v: set() for v in verts}
+        # Loop over vertices to store connected other vertices
+        for v in verts:
+            for e in v.link_edges:
+                other = e.other_vert(v)
+                if other.select == selection_state:
+                    result[v].add(other)
+        return result
 
-    x, y, z = [[v[i] for v in vcos] for i in range(3)]
-    center = [findCenter(axis) for axis in [x, y, z]]
-    return center
-
-
-def unselect_flush_vert_selection(obj):
-    '''
-    Unselect vertices in a mesh (OBJECT mode required)
-    @obj: the object that holds mesh data
-    '''
-    mesh = obj.data
-    verts = mesh.vertices
-    faces = mesh.polygons  # not faces!
-    edges = mesh.edges
-    # vertices can be selected
-    # to deselect vertices you need to deselect faces(polygons) and edges at first
-    for f in faces:
-        f.select = False
-    for e in edges:
-        e.select = False
-    for v in verts:
-        v.select = False
+    def make_islands(self, bm_verts, selection_state):
+        paths = self.make_vert_paths(bm_verts, selection_state)
+        result = []
+        found = True
+        while found:
+            try:
+                # Get one input as long there is one
+                vert = next(iter(paths.keys()))
+                # Deplete the paths dictionary following this starting vertex
+                result.append(self.make_island(vert, paths))
+            except StopIteration:
+                found = False
+        return result

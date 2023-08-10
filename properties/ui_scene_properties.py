@@ -1,7 +1,7 @@
 from bpy.props import (BoolProperty, EnumProperty, PointerProperty,
                        StringProperty)
 from bpy.types import PropertyGroup, Scene
-from ..core.faceit_utils import is_faceit_original_armature, is_other_rigify_armature
+from ..core.faceit_utils import is_faceit_original_armature
 
 workspace_tab_dict = {
     'ALL': (
@@ -39,10 +39,8 @@ def _get_tab_items_from_workspace(self, context):
 
 
 def update_tab(self, context):
-
     if context is None:
         return
-
     if self.workspace == 'ALL':
         self.all_tab = self.active_tab
     elif self.workspace == 'RIG':
@@ -52,7 +50,6 @@ def update_tab(self, context):
 
 
 def update_workspace(self, context):
-
     if self.workspace == 'ALL':
         self.active_tab = self.all_tab
     elif self.workspace == 'RIG':

@@ -1,7 +1,7 @@
 import bpy
 from bpy.props import BoolProperty, EnumProperty
 
-from ..core.modifier_utils import get_bake_modifiers
+from ..core.modifier_utils import populate_bake_modifier_items
 from ..core.faceit_utils import get_faceit_objects_list
 
 
@@ -25,7 +25,7 @@ class FACEIT_OT_LoadBakeModifiers(bpy.types.Operator):
 
     def execute(self, context):
         target_objects = [context.object] if self.object_target == 'ACTIVE' else get_faceit_objects_list()
-        get_bake_modifiers(target_objects)
+        populate_bake_modifier_items(target_objects)
         return {'FINISHED'}
 
 

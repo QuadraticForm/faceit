@@ -3,8 +3,9 @@ import json
 import os
 import time
 from contextlib import redirect_stdout
+import timeit
 
-from mathutils import kdtree, Matrix
+from mathutils import Quaternion, kdtree, Euler, Matrix, Vector
 import bpy
 import numpy as np
 from bpy.props import (BoolProperty, EnumProperty, FloatProperty,
@@ -13,7 +14,7 @@ from bpy_extras.io_utils import ExportHelper
 from mathutils import Vector
 
 
-from ..properties.animate_scene_properties import PROCEDURAL_EXPRESSION_ITEMS
+from ..properties.expression_scene_properties import PROCEDURAL_EXPRESSION_ITEMS
 
 from ..core.pose_utils import reset_pb
 from ..core.retarget_list_utils import get_all_set_target_shapes
@@ -28,11 +29,36 @@ from ..shape_keys.corrective_shape_keys_utils import (
 from . import animate_utils as a_utils
 
 
+mirror_sides_dict_L = {
+    'left': 'right',
+    'Left': 'Right',
+    'LEFT': 'RIGHT',
+}
+mirror_sides_end_L = {
+    'L': 'R',
+    '_l': '_r',
+}
+
+mirror_sides_dict_R = {
+    'right': 'left',
+    'Right': 'Left',
+    'RIGHT': 'LEFT',
+}
+mirror_sides_end_R = {
+    'R': 'L',
+    '_r': '_l',
+}
+
+
 def get_side(expression_name) -> str:
     '''Return the side L/N/R for the given expression name'''
-    if "left" in expression_name.lower() or expression_name.lower().endswith("_l") or expression_name.endswith("L"):
+    if any(
+            [x in expression_name for x in mirror_sides_dict_L]) or any(
+            [expression_name.endswith(x) for x in mirror_sides_end_L]):
         return 'L'
-    elif "right" in expression_name.lower() or expression_name.lower().endswith("_r") or expression_name.endswith("R"):
+    elif any(
+            [x in expression_name for x in mirror_sides_dict_R]) or any(
+            [expression_name.endswith(x) for x in mirror_sides_end_R]):
         return 'R'
     else:
         return 'N'
@@ -41,48 +67,35 @@ def get_side(expression_name) -> str:
 def poll_side_in_expression_name(side, expression_name) -> bool:
     '''Check if the correct side is in the expression name'''
     if side == 'L':
-        return "left" in expression_name.lower() or expression_name.lower().endswith("_l") or expression_name.endswith("L")
+        return any(
+            [x in expression_name for x in mirror_sides_dict_L]) or any(
+            [expression_name.endswith(x) for x in mirror_sides_end_L])
     if side == "R":
-        return "right" in expression_name.lower() or expression_name.lower().endswith("_r") or expression_name.endswith("R")
+        return any(
+            [x in expression_name for x in mirror_sides_dict_R]) or any(
+            [expression_name.endswith(x) for x in mirror_sides_end_R])
     return False
 
 
 def get_mirror_name(side, expression_name):
     '''Return the mirror name for the given expression name and side.'''
-    mirror_name = ""
 
     if side == "L":
-        if "Left" in expression_name:
-            mirror_name = expression_name.replace("Left", "Right")
-        elif "left" in expression_name:
-            mirror_name = expression_name.replace("left", "right")
-        elif "LEFT" in expression_name:
-            mirror_name = expression_name.replace("LEFT", "RIGHT")
-        elif expression_name.lower().endswith("_l"):
-            if expression_name[-1].islower():
-                mirror_name = expression_name[:-1] + "r"
-            else:
-                mirror_name = expression_name[:-1] + "R"
-        elif expression_name.endswith("L"):
-            mirror_name = expression_name[:-1] + "R"
+        for key, value in mirror_sides_dict_L.items():
+            if key in expression_name:
+                return expression_name.replace(key, value)
+        for key, value in mirror_sides_end_L.items():
+            if expression_name.endswith(key):
+                return expression_name.replace(key, value)
 
-    elif side == "R":
-        if "Right" in expression_name:
-            mirror_name = expression_name.replace("Right", "Left")
-        elif "right" in expression_name:
-            mirror_name = expression_name.replace("right", "left")
-        elif "RIGHT" in expression_name:
-            mirror_name = expression_name.replace("RIGHT", "LEFT")
-
-        elif expression_name.lower().endswith("_r"):
-            if expression_name[-1].islower():
-                mirror_name = expression_name[:-1] + "l"
-            else:
-                mirror_name = expression_name[:-1] + "L"
-        elif expression_name.endswith("R"):
-            mirror_name = expression_name[:-1] + "L"
-
-    return mirror_name
+    if side == "R":
+        for key, value in mirror_sides_dict_R.items():
+            if key in expression_name:
+                return expression_name.replace(key, value)
+        for key, value in mirror_sides_end_R.items():
+            if expression_name.endswith(key):
+                return expression_name.replace(key, value)
+    return ''
 
 
 def check_expression_name_valid(self, context) -> None:
@@ -191,6 +204,12 @@ class FACEIT_OT_AddExpressionItem(bpy.types.Operator):
         options={'SKIP_SAVE', 'HIDDEN'},
     )
 
+    is_new_rigify_rig: BoolProperty(
+        name="Is New Rigify Rig",
+        default=False,
+        options={'HIDDEN', 'SKIP_SAVE'},
+    )
+
     @classmethod
     def poll(cls, context):
         return True
@@ -199,7 +218,10 @@ class FACEIT_OT_AddExpressionItem(bpy.types.Operator):
 
         self.expression_item_exists = self.expression_name in context.scene.faceit_expression_list
         self.expression_sk_exists = self.expression_name in sk_utils.get_shape_key_names_from_objects()
-
+        rig = futils.get_faceit_armature()
+        if not futils.is_faceit_original_armature(rig):
+            if "lip_end.L.001" in rig.pose.bones:
+                self.is_new_rigify_rig = True
         wm = context.window_manager
         return wm.invoke_props_dialog(self)
 
@@ -240,7 +262,6 @@ class FACEIT_OT_AddExpressionItem(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
-
         auto_key = scene.tool_settings.use_keyframe_insert_auto
         scene.tool_settings.use_keyframe_insert_auto = False
 
@@ -270,7 +291,6 @@ class FACEIT_OT_AddExpressionItem(bpy.types.Operator):
 
             if not poll_side_in_expression_name(self.side, self.expression_name):
                 self.side = 'N'
-
             if not item.mirror_name:
                 item.mirror_name = get_mirror_name(self.side, expression_name_final)
 
@@ -307,6 +327,7 @@ class FACEIT_OT_AddExpressionItem(bpy.types.Operator):
                 bpy.ops.faceit.procedural_eye_blinks(
                     side=self.side,
                     anim_mode='ADD' if self.side == 'N' else 'REPLACE',
+                    is_new_rigify_rig=self.is_new_rigify_rig
                 )
 
             if self.auto_mirror and self.side != 'N':
@@ -316,7 +337,8 @@ class FACEIT_OT_AddExpressionItem(bpy.types.Operator):
                     expression_name=item.mirror_name,
                     custom_shape=True,
                     side=mirror_side,
-                    procedural=self.procedural
+                    procedural=self.procedural,
+                    is_new_rigify_rig=self.is_new_rigify_rig,
                 )
 
             scene.faceit_expression_list_index = index
@@ -326,6 +348,7 @@ class FACEIT_OT_AddExpressionItem(bpy.types.Operator):
                 bpy.ops.faceit.procedural_eye_blinks(
                     side=self.side,
                     anim_mode='ADD' if self.side == 'N' else 'REPLACE',
+                    is_new_rigify_rig=self.is_new_rigify_rig
                 )
 
         scene.tool_settings.use_keyframe_insert_auto = auto_key
@@ -496,7 +519,7 @@ class FACEIT_OT_MoveExpressionItem(bpy.types.Operator):
 class FACEIT_OT_AppendActionToFaceitRig(bpy.types.Operator):
     ''' Load a compatible Faceit Expression Action to the Faceit Armature Object. Creates two actions (faceit_shape_action, overwrite_shape_action) '''
     bl_idname = "faceit.append_action_to_faceit_rig"
-    bl_label = "Load Faceit Expression Action"
+    bl_label = "Load Faceit Expressions"
     bl_options = {'UNDO', 'INTERNAL'}
 
     expressions_type: EnumProperty(
@@ -507,7 +530,6 @@ class FACEIT_OT_AppendActionToFaceitRig(bpy.types.Operator):
                ('PHONEMES', "Phonemes", "Phoneme Expressions"),
                ),
         default='ARKIT')
-
     expression_presets = {
         'ARKIT': "arkit_expressions.face",
         'TONGUE': "tongue_expressions.face",
@@ -520,7 +542,6 @@ class FACEIT_OT_AppendActionToFaceitRig(bpy.types.Operator):
         default=False,
         options={'SKIP_SAVE', },
     )
-
     load_method: EnumProperty(
         name="Load Method",
         items=(
@@ -530,35 +551,14 @@ class FACEIT_OT_AppendActionToFaceitRig(bpy.types.Operator):
         ),
         default='APPEND'
     )
-
     filepath: StringProperty(
         subtype="FILE_PATH",
         default='face'
     )
-
     filter_glob: StringProperty(
         default="*.face;",
         options={'HIDDEN'},
     )
-    armature_apply: BoolProperty(
-        name="Apply Rest Pose",
-        default=True
-    )
-
-    force_rotation_mode: BoolProperty(
-        name="Force Euler Rotation (XYZ)",
-        description="This is necessary for the action to work properly!",
-        default=True,
-        options={'SKIP_SAVE', },
-    )
-
-    # default_constraints: BoolProperty(
-    #     name="Default Constraints",
-    #     description="Reset constraints to default values before laoding the new action",
-    #     default=True,
-    #     options={'SKIP_SAVE', },
-    # )
-
     scale_method: EnumProperty(
         name='Scale Method',
         items=(
@@ -567,7 +567,6 @@ class FACEIT_OT_AppendActionToFaceitRig(bpy.types.Operator):
         ),
         default='AUTO',
     )
-
     auto_scale_method: EnumProperty(
         name='Auto Scale Method',
         items=(
@@ -576,14 +575,12 @@ class FACEIT_OT_AppendActionToFaceitRig(bpy.types.Operator):
         ),
         default='GLOBAL',
     )
-
     auto_scale_anime_eyes: BoolProperty(
         name="Scale For Anime Eyes",
         default=False,
         description="Scale all expressions down for Anime Eyes (flat eyes with pivots that lie inside the skull)",
         options={'SKIP_SAVE', }
     )
-
     new_action_scale: FloatVectorProperty(
         name="New Scale",
         default=(1.0, 1.0, 1.0),
@@ -592,16 +589,35 @@ class FACEIT_OT_AppendActionToFaceitRig(bpy.types.Operator):
         name="Scale Eye Dimensions",
         default=True
     )
-
     apply_existing_corrective_shape_keys: BoolProperty(
         name="Apply Corrective Shape Keys",
         description="Try to apply the existing corrective shape keys to the new expressions.",
         default=True,
     )
+    is_version_one: BoolProperty(
+        options={'SKIP_SAVE', },
+    )
+    custom_expressions_rig_type: EnumProperty(
+        name='Rig Type',
+        items=(
+            ('RIGIFY', "Rigify", "Faceit default Rig (Rigify old)"),
+            ('RIGIFY_NEW', "New Rigify", "The new Rigify Face Rig"),
+        ),
+        default='RIGIFY',
+        options={'SKIP_SAVE', },
+    )
+    convert_animation_to_new_rigify: BoolProperty(
+        name="Convert Animation to New Rigify",
+        description="Convert the animation to the new Rigify Rig",
+        default=False,
+        options={'SKIP_SAVE', },
+    )
 
-    corr_sk = False
-    custom_rig = False
-    first_expression_set = False
+    def __init__(self):
+        self.corr_sk = False
+        self.first_expression_set = False
+        self.is_new_rigify_rig = False
+        self.rig_type = 'FACEIT'
 
     @ classmethod
     def poll(cls, context):
@@ -613,18 +629,14 @@ class FACEIT_OT_AppendActionToFaceitRig(bpy.types.Operator):
                 return True
 
     def invoke(self, context, event):
-
         self.filepath = "faceit_expressions.face"
-
         self.corr_sk = any([sk_name.startswith("faceit_cc_")
                             for sk_name in sk_utils.get_shape_key_names_from_objects()])
-
         rig = futils.get_faceit_armature()
-        if not futils.is_faceit_original_armature(rig):
-            self.custom_rig = True
-
+        self.rig_type = futils.get_rig_type(rig)
+        if self.rig_type == 'RIGIFY_NEW':
+            self.is_new_rigify_rig = True
         self.first_expression_set = (len(context.scene.faceit_expression_list) <= 0)
-
         if self.load_custom_path:
             context.window_manager.fileselect_add(self)
             return {'RUNNING_MODAL'}
@@ -634,132 +646,106 @@ class FACEIT_OT_AppendActionToFaceitRig(bpy.types.Operator):
 
     def draw(self, context):
         layout = self.layout
-        if not self.load_custom_path:
-            row = layout.row()
-            row.prop(self, "expressions_type")
-        row = layout.row()
-        row.label(text="Choose Append Method")
-        row = layout.row()
-        row.prop(self, "load_method", expand=True)
+        if not self.is_version_one:
+            if not self.load_custom_path:
+                row = layout.row()
+                row.prop(self, "expressions_type")
+            if not self.first_expression_set:
+                row = layout.row()
+                row.label(text="Choose Append Method")
+                row = layout.row()
+                row.prop(self, "load_method", expand=True)
         row = layout.row()
         row.label(text="Choose Scale Method")
         row = layout.row()
         row.prop(self, "scale_method", expand=True)
         row = layout.row()
         if self.scale_method == 'OVERWRITE':
-            row = layout.row()
             row.prop(self, "new_action_scale")
         elif self.scale_method == 'AUTO':
-            row = layout.row()
             row.prop(self, "auto_scale_method", expand=True)
-
         row = layout.row()
         row.prop(self, "auto_scale_eyes", icon='CON_DISTLIMIT')
-
         if self.corr_sk:
             row = layout.row()
             row.prop(self, "apply_existing_corrective_shape_keys")
-        if context.scene.faceit_use_eye_pivots:
+        if context.scene.faceit_eye_pivot_options == 'BONE_PIVOT':
             row = layout.row()
             row.label(text="Anime")
             row = layout.row()
             row.prop(self, "auto_scale_anime_eyes", icon='LIGHT_HEMI')
-        if self.custom_rig:
-            row = layout.row()
-            row.label(text="Custom Rig Settings")
-            row = layout.row()
-            row.prop(self, "force_rotation_mode")
-            row.prop(self, "armature_apply")
-        # row = layout.row()
-        # row.prop(self, "default_constraints")
+        if self.load_method == 'OVERWRITE' and not self.first_expression_set:
+            box = layout.box()
+            row = box.row()
+            row.label(text="Warning", icon='ERROR')
+            row = box.row()
+            row.label(text="This will overwrite the existing expressions!")
 
     def execute(self, context):
+        scene = context.scene
+        save_frame = scene.frame_current
         state_dict = futils.save_scene_state(context)
-
         if self.load_custom_path:
-
             _filename, extension = os.path.splitext(self.filepath)
-
             if extension != ".face":
                 self.report({'ERROR'}, "You need to provide a file of type .face")
                 return {'CANCELLED'}
-
             if not os.path.isfile(self.filepath):
                 self.report({'ERROR'}, f"The specified filepath does not exist: {os.path.realpath(self.filepath)}")
                 return {'CANCELLED'}
-
-        scene = context.scene
-        save_frame = scene.frame_current
+            expressions_type = None
+        else:
+            expressions_type = self.expressions_type
         expression_list = scene.faceit_expression_list
-
         warnings = False
-
-        if futils.get_object_mode_from_context_mode(context.mode) != 'OBJECT' and context.object != None:
+        if futils.get_object_mode_from_context_mode(context.mode) != 'OBJECT' and context.object is not None:
             bpy.ops.object.mode_set()
-
         rig = futils.get_faceit_armature()
-
         if not rig.animation_data:
             rig.animation_data_create()
-
         ow_action = bpy.data.actions.get("overwrite_shape_action")
         shape_action = bpy.data.actions.get("faceit_shape_action")
-
         if self.load_method == 'APPEND':
             if not expression_list:
                 self.report(
                     {'INFO'},
                     "Could not append the expressions, because there are no shapes. Using Overwrite method instead")
                 self.load_method = 'OVERWRITE'
-
             if not shape_action or not ow_action:
                 self.report(
                     {'INFO'},
                     "Could not append the action, because no Action was found. Using Overwrite method instead")
                 self.load_method = 'OVERWRITE'
-
         if self.load_method == 'OVERWRITE':
-
             expression_list.clear()
-
             if shape_action:
                 bpy.data.actions.remove(shape_action)
                 shape_action = None
             if ow_action:
                 bpy.data.actions.remove(ow_action)
                 ow_action = None
-
         # Reset all bone transforms!
         futils.set_active_object(rig.name)
-
         layer_state = rig.data.layers[:]
         for i, _ in enumerate(rig.data.layers):
             rig.data.layers[i] = True
-
         bpy.ops.object.mode_set(mode='POSE')
-
         bpy.ops.pose.select_all(action='SELECT')
         bpy.ops.pose.transforms_clear()
-
-        if self.armature_apply:
-            bpy.ops.pose.armature_apply(selected=False)
-
-        # if self.default_constraints:
-        #     a_utils.restore_constraints_to_default_values(rig)
-
         # ------------------ Read New Expressions Data ------------------------
         # | - Load Expressions Data to temp action
         # | - Keyframes, Rig Dimensions, Rest Pose,
         # ---------------------------------------------------------------------
-
         new_shape_action = None
-
         if not self.load_custom_path:
-            self.filepath = fdata.get_expression_presets() + self.expression_presets[self.expressions_type]
-
+            self.filepath = fdata.get_expression_presets(
+                rig_type=self.rig_type) + self.expression_presets[expressions_type]
+        if not os.path.isfile(self.filepath):
+            self.report({'ERROR'}, f"The specified filepath does not exist: {os.path.realpath(self.filepath)}")
+            return {'CANCELLED'}
         action_dict = {}
         eye_dimensions = []
-
+        loaded_rig_type = 'FACEIT'
         with open(self.filepath, "r") as f:
             data = json.load(f)
             if isinstance(data, dict):
@@ -768,117 +754,144 @@ class FACEIT_OT_AppendActionToFaceitRig(bpy.types.Operator):
                 rest_pose = data["rest_pose"]
                 action_dict = data["action"]
                 eye_dimensions = data.get("eye_dimensions")
-
-        if self.force_rotation_mode:
-            for bone in rig.pose.bones:
-                bone.rotation_mode = 'XYZ'
-
+                loaded_rig_type = data.get("rig_type", 'FACEIT')
+        if loaded_rig_type == 'FACEIT' and self.is_new_rigify_rig:
+            print("Converting old FaceIt Rig to new Rigify Rig")
+            self.convert_animation_to_new_rigify = True
         new_shape_action = bpy.data.actions.new(name="temp")
         rig.animation_data.action = new_shape_action
-
         new_expression_count = len(expression_data_loaded.keys())
-
         zero_frames = set()
         new_frames = []
         for i in range(new_expression_count):
             frame = (i + 1) * 10
             new_frames.append(frame)
             zero_frames.update((frame + 1, frame - 9))
-
         zero_frames = sorted(list(zero_frames))
-
         start_time = time.time()
-
         missing_dps = []
 
-        def _get_rotation_mode(bone):
-            rot_mode = bone.rotation_mode
-            if len(rot_mode) <= 3:
-                rot_mode = 'EULER'
-            return rot_mode
-
-        def _match_bone_rotation(bone, rotation_values):
-            '''converts rotation values to the expected rotation mode of the bone'''
-            rot_mode = _get_rotation_mode(bone)
-            if rot_mode == 'EULER':
-                return rotation_values
-
-            rot = rot.to_quaternion()
-            if rot_mode == 'AXIS_ANGLE':
-                vec, angle = rot.to_axis_angle()
-                rot = [angle]
-                rot.extend([i for i in vec])
-
-        # load rotation values
-        # for dp, data_per_array_index in action_dict.items():
-        #     if "rotation" in dp:
-
+        # In order to convert the rotation values to the expected rotation mode of the bone
+        # we need to reconstruct the values from the data array.
+        # The data array contains the rotation values separated by channels.
         for dp, data_per_array_index in action_dict.items():
-            bone_name = dp[dp.find("bones[\"") + 7: dp.find("\"]")]
+            bone_name = a_utils.get_bone_name_from_data_path(dp)
+            if self.convert_animation_to_new_rigify:
+                new_name = fdata.get_rigify_bone_from_old_name(bone_name)
+                dp = dp.replace(bone_name, new_name)
+                bone_name = new_name
             if "influence" in dp:
                 continue
             if bone_name not in rig.pose.bones:
                 if bone_name not in missing_dps:
                     missing_dps.append(bone_name)
-            else:
+                continue
+            # Get only the data path value
+            data_path_from = a_utils.get_data_path_value(dp)
+            channels = None
+            if "rotation" in data_path_from:
                 pose_bone = rig.pose.bones[bone_name]
-                rot_mode = _get_rotation_mode(pose_bone)
-                # Make sure all channels are animated to avoid non-zeroed-out keyframes
-                if "rotation_quaternion" in dp:
-                    channels = 4
-                elif any(x in dp for x in ["scale", "rotation_euler", "location"]):
+                rot_mode_to = a_utils.get_rotation_mode(pose_bone)
+                rotation_data_path_to = a_utils.get_data_path_from_rotation_mode(rot_mode_to)
+                rot_mode_from = a_utils.get_rotation_mode_from_data_path_val(data_path_from)
+                # Check if the rotation mode is already the expected rotation mode, nothing needs to be done
+                if data_path_from == "rotation_euler":
                     channels = 3
                 else:
-                    channels = 1
-
-                for i in range(channels):
-
-                    data = data_per_array_index.get(str(i))
-                    fc = new_shape_action.fcurves.new(data_path=dp, index=i)
-
-                    if data:
-                        kf_data = np.array(data)
+                    # axis_angle and quaternion both have 4 channels.
+                    channels = 4
+                if rotation_data_path_to != data_path_from:
+                    if rot_mode_to == 'EULER':
+                        new_channels = 3
                     else:
-                        kf_data = np.empty(2)
-
-                    # Adding Zero Keyframes for all rest poses inbetween expressions!
-                    base_value = 0
-                    if "scale" in dp:
-                        base_value = 1
-                    elif "rotation_quaternion" in dp and i == 0:
-                        base_value = 1
-
-                    kf_data_base = np.array([(f, base_value) for f in zero_frames])
-                    if kf_data.ndim == 1:
-                        kf_data = kf_data_base
-                    else:
-                        kf_data = np.concatenate((kf_data, kf_data_base), axis=0)
-
-                    # Sort kf_data by frame (all rows, first column)
-                    kf_data[kf_data[:, 0].argsort()]
-
-                    fc_dr_utils.populate_keyframe_points_from_np_array(fc, kf_data, add=True)
-
+                        new_channels = 4
+                    # Replace the data path with the expected rotation mode
+                    dp = dp.replace(data_path_from, rotation_data_path_to)
+                    # Get the number of channels for the old rotation mode and new rotation_mode
+                    # Reconstruct full rotation values based on the individual channels in the data array
+                    # and convert them to the expected rotation mode
+                    # currently the data is stored like this: {i: [(frame, value), (frame, value), ...]}
+                    # new format (frames_dict) for rotation mode conversion {frame: {i:[value, value, ...]}}
+                    frames_dict = {}
+                    for i, frame_value_list in data_per_array_index.items():
+                        i = int(i)
+                        for frame, value in frame_value_list:
+                            if frame not in frames_dict:
+                                frames_dict[frame] = {}
+                            frames_dict[frame][i] = value
+                    # Convert the rotation values to the expected rotation mode and populate into the data_dict
+                    data_per_array_index = {}
+                    for frame, value_dict in frames_dict.items():
+                        rot_value = []
+                        for i in range(channels):
+                            val = value_dict.get(i)
+                            if val:
+                                rot_value.append(val)
+                            else:
+                                # Reconstruct missing values (default value for this channel)
+                                if i == 0 and data_path_from == 'rotation_quaternion':
+                                    rot_value.append(1)
+                                    # axis angle default (0.0, 0.0, 1.0, 0.0)
+                                else:
+                                    rot_value.append(0)
+                        rot_value = a_utils.get_value_as_rotation(rot_mode_from, rot_value)  # Euler(rot_value)
+                        new_rot_value = a_utils.convert_rotation_values(rot_value, rot_mode_from, rot_mode_to)[:]
+                        # Reconstruct the data dict with new rotation mode / values
+                        for i, value in enumerate(new_rot_value):
+                            i = str(i)
+                            if i not in data_per_array_index:
+                                data_per_array_index[i] = []
+                            data_per_array_index[i].append([frame, value])
+                    channels = new_channels
+            elif any(x in dp for x in ["scale", "location"]):
+                channels = 3
+            else:
+                channels = 1
+            for i in range(channels):
+                data = data_per_array_index.get(str(i))
+                fc = new_shape_action.fcurves.find(data_path=dp, index=i)
+                if fc:
+                    print("FCurve already exists! Skipping: {}".format(fc.data_path))
+                    break
+                fc = new_shape_action.fcurves.new(data_path=dp, index=i)
+                if data:
+                    kf_data = np.array(data)
+                else:
+                    kf_data = np.empty(2)
+                # Adding Zero Keyframes for all rest poses inbetween expressions!
+                base_value = 0
+                if "scale" in dp:
+                    base_value = 1
+                elif "rotation_quaternion" in dp and i == 0:
+                    base_value = 1
+                kf_data_base = np.array([(f, base_value) for f in zero_frames])
+                if kf_data.ndim == 1:
+                    kf_data = kf_data_base
+                else:
+                    kf_data = np.concatenate((kf_data, kf_data_base), axis=0)
+                kf_data = kf_data[kf_data[:, 0].argsort()]
+                fc_dr_utils.populate_keyframe_points_from_np_array(fc, kf_data, add=True)
         for fc in new_shape_action.fcurves:
+            if 'jaw_master_mouth' in fc.data_path:
+                print(fc.data_path)
             for kf in fc.keyframe_points:
                 kf.interpolation = 'LINEAR'
-
         print(f"Added new Keyframes in {round(time.time() - start_time, 2)}")
-
         for bone_name in missing_dps:
-            self.report(
-                {'WARNING'},
-                f"An Fcurve has been loaded for the bone {bone_name} which is missing in the Faceit Rig. Regenerate the Rig!")
+            if self.rig_type == 'FACEIT':
+                self.report(
+                    {'WARNING'},
+                    f"An Fcurve has been loaded for the bone {bone_name} which is missing in the Faceit Rig. Regenerate the Rig!")
+            else:
+                self.report(
+                    {'WARNING'},
+                    f"An Fcurve has been loaded for the bone {bone_name} which is missing in the Rig {rig.name}.")
             warnings = True
-
-        # ------------- Scale new Poses and restore rig properties -----------
-
         # ------------------------- SCALE ACTION ----------------------------------
         # | - Scale Action to new rig dimensions.
         # | - Eyelid is calculated and skaled separately.
         # -------------------------------------------------------------------------
-
-        skip_lid_bones = [
+        skip_lid_bones = {
             "lid.T.L.003",
             "lid.T.L.002",
             "lid.T.L.001",
@@ -895,28 +908,31 @@ class FACEIT_OT_AppendActionToFaceitRig(bpy.types.Operator):
             "lid.B.R.003",
             "lid.B.R",
             "lid.T.R",
-        ]
-
-        skip_double_constraint = [
+        }
+        skip_double_constraint = {
             "nose.005",
             "chin.002",
             "nose.003",
-
-        ]
-
+        }
         skip_scale_bones = skip_double_constraint
-
         if eye_dimensions and self.auto_scale_eyes:
-            skip_scale_bones += skip_lid_bones
+            skip_scale_bones.update(skip_lid_bones)
+        # get control bones on the face only (no eye target controllers)
+        skip_dimension_check = {"eye.L", "eye.R", "eyes", "eye_common"}
+        # Relevant / animated bones for scaling
+        facial_control_bones = {pb.name for pb in rig.pose.bones if pb.name in fdata.FACEIT_CTRL_BONES}
+        # Dimension relevant control bones that are present in rig and in the imported data
+        bone_dimensions_check = facial_control_bones.intersection(rest_pose) - skip_dimension_check
 
-        action_scale = [1.0, ] * 3
-
-        def get_import_rig_dimensions():
+        def get_import_rig_dimensions(pose_bones):
             '''Get the dimensions of the imported rest pose data'''
             x_values = []
             y_values = []
             z_values = []
-            for _, values in rest_pose.items():
+            # Return the bones that are found for comparison!
+            # for _, values in rest_pose.items():
+            for pb in pose_bones:
+                values = rest_pose.get(pb.name)
                 x_values.append(values[0])
                 y_values.append(values[1])
                 z_values.append(values[2])
@@ -925,37 +941,41 @@ class FACEIT_OT_AppendActionToFaceitRig(bpy.types.Operator):
             dim_z = max(z_values) - min(z_values)
             return [dim_x, dim_y, dim_z]
 
-        def get_rig_dimensions():
+        def get_rig_dimensions(pose_bones):
             '''Get the dimensions for all faceit control bones'''
             x_values = []
             y_values = []
             z_values = []
-            for bone_name in fdata.FACEIT_CTRL_BONES:
-                pose_bone = rig.pose.bones.get(bone_name)
-                if pose_bone:
-                    x_values.append(pose_bone.bone.matrix_local.translation[0])
-                    y_values.append(pose_bone.bone.matrix_local.translation[1])
-                    z_values.append(pose_bone.bone.matrix_local.translation[2])
+            for pb in pose_bones:
+                x_values.append(pb.bone.matrix_local.translation[0])
+                y_values.append(pb.bone.matrix_local.translation[1])
+                z_values.append(pb.bone.matrix_local.translation[2])
             dim_x = max(x_values) - min(x_values)
             dim_y = max(y_values) - min(y_values)
             dim_z = max(z_values) - min(z_values)
             return [dim_x, dim_y, dim_z]
 
+        action_scale = [1.0, ] * 3
+        scale_bones = [pb for pb in rig.pose.bones if pb.name in (facial_control_bones - skip_scale_bones)]
+        # scale_bones = [pb for pb in facial_control_bones if pb.name not in skip_scale_bones]
         if self.scale_method == 'AUTO':
-            rig_dim = get_rig_dimensions()
-            import_rig_dimensions = get_import_rig_dimensions()
+            # get bones present in both current pose and imported pose and compare dimensions
+            bone_dimensions_check = [pb for pb in rig.pose.bones if pb.name in bone_dimensions_check]
+            import_rig_dimensions = get_import_rig_dimensions(bone_dimensions_check)
+            rig_dim = get_rig_dimensions(bone_dimensions_check)
+            # print(f"Rig Dimensions: {rig_dim}")
+            # print(f"Import Rig Dimensions: {import_rig_dimensions}")
             for i in range(3):
                 action_scale[i] = rig_dim[i] / import_rig_dimensions[i]
             if not all(x == 1 for x in action_scale):
-
                 if self.auto_scale_method == 'GLOBAL':
                     a_utils.scale_poses_to_new_dimensions_slow(
                         rig,
+                        pose_bones=scale_bones,
                         scale=action_scale,
-                        filter_skip=skip_scale_bones,
+                        active_action=new_shape_action,
                         frames=new_frames
                     )
-
                 else:
                     a_utils.scale_action_to_rig(
                         new_shape_action,
@@ -963,27 +983,29 @@ class FACEIT_OT_AppendActionToFaceitRig(bpy.types.Operator):
                         filter_skip=skip_lid_bones,
                         frames=new_frames
                     )
-
         elif self.scale_method == 'OVERWRITE':
             action_scale = self.new_action_scale
             if not all(x == 1 for x in action_scale):
                 a_utils.scale_poses_to_new_dimensions_slow(
                     rig,
+                    pose_bones=scale_bones,
                     scale=action_scale,
+                    active_action=new_shape_action,
                     frames=new_frames
                 )
-
         # Scale eyelid expressions to new dimensions!
         if eye_dimensions and self.auto_scale_eyes:
             a_utils.scale_eye_animation(rig, *eye_dimensions, action=new_shape_action)
-
         if self.auto_scale_anime_eyes:
-            a_utils.scale_anime_eye_animation(rig, scale_factor=0.45, action=new_shape_action)
+            a_utils.scale_eye_look_animation(rig, scale_factor=0.45, action=new_shape_action)
+        # check if the expressions are generated with the new rigify rig, if so no need to scale.
+        if self.is_new_rigify_rig and self.convert_animation_to_new_rigify:  # and self.convert_to_new_rigify_rig:
+            a_utils.scale_eye_look_animation(rig, scale_factor=0.25, action=new_shape_action)
+
         # ------------------------ Append the keyframes -------------------------------
         # | - Append the Keyframes
         # | - Activate the Shape Action
         # -------------------------------------------------------------------------
-
         if self.load_method == 'OVERWRITE':
             shape_action = new_shape_action
             shape_action.name = "faceit_shape_action"
@@ -995,7 +1017,6 @@ class FACEIT_OT_AppendActionToFaceitRig(bpy.types.Operator):
                 kf_data[:, 0] += frame_offset
                 dp = import_fc.data_path
                 a_index = import_fc.array_index
-
                 if shape_action:
                     fc = fc_dr_utils.get_fcurve_from_bpy_struct(shape_action.fcurves, dp=dp, array_index=a_index)
                     fc_dr_utils.populate_keyframe_points_from_np_array(fc, kf_data, add=True)
@@ -1008,71 +1029,61 @@ class FACEIT_OT_AppendActionToFaceitRig(bpy.types.Operator):
                 else:
                     self.report({'WARNING'}, "Could not find the Faceit Overwrite Action. Failed to append")
                     warnings = True
-
             bpy.data.actions.remove(new_shape_action)
-
         if self.load_method == 'OVERWRITE':
             ow_action = a_utils.create_overwrite_animation(rig)
-
         if ow_action:
             rig.animation_data.action = ow_action
             ow_action.use_fake_user = True
         if shape_action:
             shape_action.use_fake_user = True
-
         # ------------------------ Load Expressions -------------------------------
         # | - Load Expressions Items to list.
         # -------------------------------------------------------------------------
-
         for expression_name, expression_data in expression_data_loaded.items():
-
             mirror_name = expression_data.get("mirror_name", "")
             side = expression_data.get("side") or "N"
             procedural = expression_data.get("procedural", 'NONE')
-            print(f"adding {expression_name}, side:{side}, mirror:{mirror_name}, procedural:{procedural}")
+            # print(f"adding {expression_name}, side:{side}, mirror:{mirror_name}, procedural:{procedural}")
             bpy.ops.faceit.add_expression_item(
                 'EXEC_DEFAULT',
                 expression_name=expression_name,
                 side=side,
                 mirror_name_overwrite=mirror_name,
-                procedural=procedural
+                procedural=procedural,
+                is_new_rigify_rig=self.is_new_rigify_rig
             )
-
-        if self.expressions_type == 'ARKIT' and not self.load_custom_path:
+        if expressions_type == 'ARKIT':  # and not self.load_custom_path:
             bpy.ops.faceit.procedural_mouth_close(
                 'INVOKE_DEFAULT',
                 jaw_open_expression="jawOpen",
-                mouth_close_expression="mouthClose"
+                mouth_close_expression="mouthClose",
+                is_new_rigify_rig=self.is_new_rigify_rig
             )
-        if self.expressions_type == 'A2F' and not self.load_custom_path:
+        if expressions_type == 'A2F':  # and not self.load_custom_path:
             bpy.ops.faceit.procedural_mouth_close(
                 'INVOKE_DEFAULT',
                 jaw_open_expression="jawDrop",
-                mouth_close_expression="jawDropLipTowards"
+                mouth_close_expression="jawDropLipTowards",
+                is_new_rigify_rig=self.is_new_rigify_rig
             )
-
         bpy.ops.faceit.force_zero_frames('EXEC_DEFAULT')
-
         rig.data.layers = layer_state[:]
-
         if warnings:
             self.report(
                 {'WARNING'},
                 "Operator finished with Warnings. Take a look at the console output for more information.")
         else:
             self.report({'INFO'}, "New Expressions.")
-
         if self.apply_existing_corrective_shape_keys:
             reevaluate_corrective_shape_keys(expression_list, futils.get_faceit_objects_list())
         else:
             clear_all_corrective_shape_keys(futils.get_faceit_objects_list(), expression_list=expression_list)
-
         scene.frame_start, scene.frame_end = (int(x) for x in futils.get_action_frame_range(ow_action))
-        scene.frame_set(save_frame)
         futils.restore_scene_state(context, state_dict)
         if self.first_expression_set:
             scene.tool_settings.use_keyframe_insert_auto = True
-
+        scene.frame_current = save_frame
         return {'FINISHED'}
 
 
@@ -1158,21 +1169,6 @@ class FACEIT_OT_ForceZeroFrames(bpy.types.Operator):
                 fc.keyframe_points.insert(f, kf_zero_value, options={'FAST'})
 
             fc.update()
-
-        # for b_name, constraints_dict in a_utils.BONE_CONSTRAINT_DP_VALUE_DICT.items():
-        #     pbone = rig.pose.bones.get(b_name)
-        #     if pbone:
-        #         for c, influence in constraints_dict.items():
-        #             constraint = pbone.constraints.get(c)
-        #             if constraint:
-        #                 # constraint.influence = influence
-        #                 fc = fc_dr_utils.get_fcurve_from_bpy_struct(
-        #                     rig.animation_data.action.fcurves,
-        #                     dp=f'pose.bones["{b_name}"].constraints["{c}"].influence'
-        #                 )
-        #                 for f in zero_frames:
-        #                     fc.keyframe_points.insert(f, influence, options={'FAST'})
-
         scene.frame_current = save_frame
         bpy.ops.pose.select_all(action='DESELECT')
         rig.data.layers = layer_state[:]
@@ -1193,14 +1189,13 @@ class FACEIT_OT_ExportExpressionsToJson(bpy.types.Operator, ExportHelper):
         subtype="FILE_PATH",
         default="faceit_expressions"
     )
-
     filter_glob: StringProperty(
         default="*.face;",
         options={'HIDDEN'},
     )
-
     filename_ext = ".face"
     adjust_scale = True
+    rig_type = 'FACEIT'
 
     @ classmethod
     def poll(cls, context):
@@ -1212,51 +1207,39 @@ class FACEIT_OT_ExportExpressionsToJson(bpy.types.Operator, ExportHelper):
                     return True
 
     def execute(self, context):
-
         scene = context.scene
         rig = futils.get_faceit_armature()
-
+        # value in 'FACEIT', 'RIGIFY', 'RIGIFY_NEW'
+        rig_type = futils.get_rig_type(rig)
         scene = context.scene
         save_frame = scene.frame_current
         auto_key = scene.tool_settings.use_keyframe_insert_auto
         scene.tool_settings.use_keyframe_insert_auto = False
         expression_list = scene.faceit_expression_list
-
         mode_save = futils.get_object_mode_from_context_mode(context.mode)
         if context.active_object != rig:
             if mode_save != 'OBJECT' and context.object is not None:
                 bpy.ops.object.mode_set()
             futils.clear_object_selection()
             futils.set_active_object(rig.name)
-
         layer_state = rig.data.layers[:]
         for i, _ in enumerate(rig.data.layers):
             rig.data.layers[i] = True
-
         bpy.ops.object.mode_set(mode='POSE')
-
         bpy.ops.pose.select_all(action='SELECT')
         bpy.ops.pose.transforms_clear()
-
         bpy.ops.pose.select_all(action='DESELECT')
         try:
             bpy.ops.object.mode_set(mode=mode_save)
         except TypeError:
             print(f"Can't activate mode {mode_save} from current context")
-
         rig.data.layers = layer_state[:]
-
         action_scale = list(rig.dimensions.copy())
-
         eye_dim_L, eye_dim_R = a_utils.get_eye_dimensions(rig)
-
         action = rig.animation_data.action
-
         data = {}
         expression_list_data = {}
-
         expression_list = scene.faceit_expression_list
-
         for exp in expression_list:
             procedural = getattr(exp, "procedural", 'NONE')
             if exp.name in ("eyeBlinkLeft", "eyeBlinkRight") and procedural == 'NONE':
@@ -1266,44 +1249,36 @@ class FACEIT_OT_ExportExpressionsToJson(bpy.types.Operator, ExportHelper):
                 'side': exp.side,
                 'procedural': procedural
             }
-
         rest_pose_dict = {}
         for pb in rig.pose.bones:
             layers = pb.bone.layers
             if layers[0] is True or layers[1] is True or layers[2] is True:
                 rest_pose_dict[pb.name] = list(pb.bone.matrix_local.translation)
-
         action_dict = {}
         remove_zero_keyframes = True
         remove_zero_poses = True
-
         for fc in action.fcurves:
             dp = fc.data_path
             array_index = fc.array_index
-
             # skip non-control bones
             if any(x in dp for x in ["DEF-", "MCH-", "ORG-"]):
                 continue
             # Skip constraint animation
             if "influence" in fc.data_path:
                 continue
-
             kf_data = fc_dr_utils.kf_data_to_numpy_array(fc)
-
             if "mouth_lock" in dp:
                 print("skipping mouth lock")
                 pass
             else:
                 if remove_zero_poses:
                     kf_data = kf_data[np.logical_not(kf_data[:, 0] % 10 != 0)]
-
                 if remove_zero_keyframes:
                     if "scale" in fc.data_path or "rotation_quaternion" in fc.data_path and array_index == 0:
                         kf_data = kf_data[np.logical_not(kf_data[:, 1] == 1.0)]
                     else:
                         # delete zero values
                         kf_data = kf_data[np.logical_not(kf_data[:, 1] == 0.0)]
-
             kf_anim_data = kf_data.tolist()
             if not kf_anim_data:
                 continue
@@ -1312,19 +1287,16 @@ class FACEIT_OT_ExportExpressionsToJson(bpy.types.Operator, ExportHelper):
                 dp_dict[array_index] = kf_anim_data
             else:
                 action_dict[dp] = {array_index: kf_anim_data}
-
+        data["rig_type"] = rig_type
         data["action_scale"] = list(action_scale)
         data["eye_dimensions"] = [eye_dim_L, eye_dim_R]
         data["expressions"] = expression_list_data
         data["rest_pose"] = rest_pose_dict
         data["action"] = action_dict
-
         if not self.filepath.endswith(".face"):
             self.filepath += ".face"
-
         with open(self.filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
-
         scene.frame_current = save_frame
         scene.tool_settings.use_keyframe_insert_auto = auto_key
 
@@ -1345,13 +1317,13 @@ class FACEIT_OT_ClearFaceitExpressions(bpy.types.Operator):
 
     corr_sk = True
 
-    @classmethod
+    @ classmethod
     def poll(cls, context):
         return True
 
     def invoke(self, context, event):
         self.corr_sk = any([sk_name.startswith("faceit_cc_")
-                            for sk_name in sk_utils.get_shape_key_names_from_objects()])
+                           for sk_name in sk_utils.get_shape_key_names_from_objects()])
 
         if self.corr_sk:
             wm = context.window_manager
@@ -1377,10 +1349,7 @@ class FACEIT_OT_ClearFaceitExpressions(bpy.types.Operator):
                 rig.animation_data.action = None
 
             for b in rig.pose.bones:
-                b.location = Vector()
-                b.rotation_euler = Vector()
-                b.scale = Vector((1, 1, 1))
-
+                reset_pb(b)
         if self.corr_sk:
             faceit_objects = futils.get_faceit_objects_list()
 
@@ -1422,7 +1391,7 @@ class FACEIT_OT_RemoveExpressionItem(bpy.types.Operator):
         options={'HIDDEN', 'SKIP_SAVE'}
     )
 
-    @classmethod
+    @ classmethod
     def poll(cls, context):
         idx = context.scene.faceit_expression_list_index
 
@@ -1674,16 +1643,15 @@ class FACEIT_OT_ResetExpression(bpy.types.Operator):
                     expression_list, futils.get_faceit_objects_list(),
                     expression_name=self.expression_to_reset
                 )
+        selected_pbones = []
         if self.selected_bones_only:
-            selected_pbones = []
             for pb in rig.pose.bones:
                 if pb.bone.select is True:
                     selected_pbones.append(pb.name)
-            for exp in expressions_operate:
-
-                frame = exp.frame
-                a_utils.reset_key_frame(action=ow_action, filter_pose_bone_names=selected_pbones,
-                                        backup_action=shape_action, frame=frame)
+        for exp in expressions_operate:
+            frame = exp.frame
+            a_utils.reset_key_frame(action=ow_action, filter_pose_bone_names=selected_pbones,
+                                    backup_action=shape_action, frame=frame)
 
         scene.faceit_expression_list_index = curr_expression
 
@@ -1936,6 +1904,12 @@ class FACEIT_OT_ProceduralEyeBlinks(bpy.types.Operator):
         default='REPLACE',
         options={'SKIP_SAVE'},
     )
+    is_new_rigify_rig: BoolProperty(
+        name="New Rigify Rig",
+        description="Use this option if you are using the new Rigify face rig.",
+        default=False,
+        options={'SKIP_SAVE'}
+    )
 
     @ classmethod
     def poll(cls, context):
@@ -1980,12 +1954,12 @@ class FACEIT_OT_ProceduralEyeBlinks(bpy.types.Operator):
         expression_item = scene.faceit_expression_list[self.expression_index]
         frame = expression_item.frame
 
-        print(
-            f"procedural expression {expression_item.name}:\
-            frame: {frame}, \
-            side: {expression_item.side}\
-            mirror: {expression_item.mirror_name},"
-        )
+        # print(
+        #     f"procedural expression {expression_item.name}:\
+        #     frame: {frame}, \
+        #     side: {expression_item.side}\
+        #     mirror: {expression_item.mirror_name},"
+        # )
 
         # Remove keyframes and reset pose
         if self.anim_mode == 'REPLACE':
@@ -2026,20 +2000,22 @@ class FACEIT_OT_ProceduralEyeBlinks(bpy.types.Operator):
         top_inner_lid = rig.pose.bones.get(f"lid.T.{self.side}.003")
         # Calculate a delta vector for each pair (top to bottom)
         mid_delta = get_bone_delta(top_mid_lid, bot_mid_lid)
-        outer_lid_delta = get_bone_delta(top_outer_lid, bot_outer_lid)
-        inner_lid_delta = get_bone_delta(top_inner_lid, bot_inner_lid)
-        # Remove constraint influence from the outer and inner lid bones
-        outer_lid_delta -= mid_delta * get_copy_location_influence(top_outer_lid)
-        inner_lid_delta -= mid_delta * get_copy_location_influence(top_inner_lid)
+        if not self.is_new_rigify_rig:
+            outer_lid_delta = get_bone_delta(top_outer_lid, bot_outer_lid)
+            inner_lid_delta = get_bone_delta(top_inner_lid, bot_inner_lid)
+            # Remove constraint influence from the outer and inner lid bones
+            outer_lid_delta -= mid_delta * get_copy_location_influence(top_outer_lid)
+            inner_lid_delta -= mid_delta * get_copy_location_influence(top_inner_lid)
         # Apply a constant offset to lower lid bones
         offset_multiplier = 0.9
         mid_delta *= offset_multiplier
-        outer_lid_delta *= offset_multiplier
-        inner_lid_delta *= offset_multiplier
         # Apply the vector to each top lid bone
         add_vector_to_bone_position(top_mid_lid, mid_delta)
-        add_vector_to_bone_position(top_outer_lid, outer_lid_delta)
-        add_vector_to_bone_position(top_inner_lid, inner_lid_delta)
+        if not self.is_new_rigify_rig:
+            outer_lid_delta *= offset_multiplier
+            inner_lid_delta *= offset_multiplier
+            add_vector_to_bone_position(top_outer_lid, outer_lid_delta)
+            add_vector_to_bone_position(top_inner_lid, inner_lid_delta)
 
         a_utils.backup_expression(action, backup_action, frame=frame)
         scene.tool_settings.use_keyframe_insert_auto = auto_key
@@ -2067,6 +2043,10 @@ class FACEIT_OT_ProceduralMouthClose(bpy.types.Operator):
     mouth_close_expression: StringProperty(
         name="The mouthClosed expression name",
         default="mouthClosed",
+    )
+    is_new_rigify_rig: BoolProperty(
+        name="New Rigify Face Rig",
+        default=False,
     )
 
     @ classmethod
@@ -2123,6 +2103,11 @@ class FACEIT_OT_ProceduralMouthClose(bpy.types.Operator):
                 "lips.L",
                 "lips.R",
             ]
+            if self.is_new_rigify_rig:
+                lip_pose_bones.remove("lips.L")
+                lip_pose_bones.remove("lips.R")
+                lip_pose_bones.append("lip_end.L.001")
+                lip_pose_bones.append("lip_end.R.001")
 
             a_utils.remove_all_animation_for_frame(action, mouth_close_shape.frame)
 
@@ -2197,7 +2182,7 @@ class NewActionBase():
         default=False,
     )
 
-    @classmethod
+    @ classmethod
     def poll(cls, context):
         return True
 
@@ -2256,7 +2241,7 @@ class FACEIT_OT_NewAction(NewActionBase, bpy.types.Operator):
     bl_idname = "faceit.new_action"
     bl_label = "New Shape Key Action"
 
-    @classmethod
+    @ classmethod
     def poll(cls, context):
         return super().poll(context)
 
@@ -2272,7 +2257,7 @@ class FACEIT_OT_NewHeadAction(NewActionBase, bpy.types.Operator):
     bl_idname = "faceit.new_head_action"
     bl_label = "New Head Action"
 
-    @classmethod
+    @ classmethod
     def poll(cls, context):
         return super().poll(context) and bpy.context.scene.faceit_head_target_object is not None
 
@@ -2292,7 +2277,7 @@ class FACEIT_OT_NewCtrlRigAction(NewActionBase, bpy.types.Operator):
     bl_idname = "faceit.new_ctrl_rig_action"
     bl_label = "New Ctrl Rig Action"
 
-    @classmethod
+    @ classmethod
     def poll(cls, context):
         return super().poll(context) and futils.get_faceit_control_armature()
 
@@ -2444,7 +2429,7 @@ class FACEIT_OT_SetBodyBindPose(bpy.types.Operator):
         options={'SKIP_SAVE'}
     )
 
-    @classmethod
+    @ classmethod
     def poll(cls, context):
         return True
 
