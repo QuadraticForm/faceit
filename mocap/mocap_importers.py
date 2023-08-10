@@ -99,7 +99,7 @@ class EpicMocapImporter(MocapBase):
                     self.eye_L_animation_lists.append([float(v) for v in row[57:60]])
                     self.eye_R_animation_lists.append([float(v) for v in row[60:63]])
 
-    def _convert_timecode_to_frames(self, timecode, framerate, start=None, recorded_framerate=60):
+    def _convert_timecode_to_frames(self, timecode, framerate, start=None):
         '''This function converts an SMPTE timecode into frames
         @timecode [str]: format hh:mm:ss:ff
         @start [str]: optional timecode to start at
@@ -109,7 +109,7 @@ class EpicMocapImporter(MocapBase):
             @value [str, int, float]: either timecode or frames
             '''
             if isinstance(value, str):  # value seems to be a timestamp
-                _zip_ft = zip((3600, 60, 1, 1 / recorded_framerate), value.split(':'))
+                _zip_ft = zip((3600, 60, 1, 1 / framerate), value.split(':'))
                 return sum(f * float(t) for f, t in _zip_ft)
             elif isinstance(value, (int, float)):  # frames
                 return value / framerate
