@@ -75,8 +75,13 @@ def faceit_active_object_callback(context):
         if bpy.context.preferences.addons["faceit"].preferences.use_vertex_size_scaling:
             bpy.context.preferences.themes[0].view_3d.vertex_size = bpy.context.preferences.addons["faceit"].preferences.default_vertex_size
     # set the active control rig
-    if active_object.get("ctrl_rig_version"):
-        scene.faceit_control_armature = active_object
+    # NID, this sets the active control rig on active object change, which is kinda annoying.
+    # NID, xiaohua's face rig is a little in compatible with FaceIt's Contrl Rig Panel, and it doesn't need faceit_control_armature to be set to work.
+    # NID, so we normally keep faceit_control_armature to None.
+    # NID, and, when faceit_control_armature is set, live mocap preview is disabled (easonable on original faceit rig, cuz shapekeys are driven by ctrl_rig OR live mocap, so ctrl_rig need to be disconnected to enable live mocap preview)
+    # NID, so it's kinda annoying that faceit_control_armature automatically sets every time user click on the armature object
+    #if active_object.get("ctrl_rig_version"):
+    #    scene.faceit_control_armature = active_object
     # Set the active faceit_objects index
     if scene.faceit_workspace.active_tab in ('SETUP', 'BAKE'):
         if active_object.name in scene.faceit_face_objects:
